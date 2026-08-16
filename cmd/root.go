@@ -68,6 +68,7 @@ func NewRootCommand(deps Dependencies) *cobra.Command {
 	cmd.SetErr(deps.Err)
 	cmd.AddCommand(newAuthCommand(deps))
 	cmd.AddCommand(newDomainCommand(deps))
+	cmd.AddCommand(newProjectCommand(deps))
 	return cmd
 }
 

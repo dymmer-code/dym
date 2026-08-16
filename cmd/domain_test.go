@@ -34,6 +34,14 @@ type fakeAPI struct {
 	lastUpdateID    string
 	lastUpdateInput api.RecordInput
 	deletedID       string
+
+	secretsResult *api.SecretsResult
+	secretsErr    error
+
+	lastSecretsProject    string
+	lastSecretsEnv        string
+	lastSecretsDeployment string
+	lastSecretsFormat     string
 }
 
 func (f *fakeAPI) ListRecords(_ context.Context, domain, recordType string) ([]api.Record, error) {
@@ -93,7 +101,17 @@ func (f *fakeAPI) ListForwardings(_ context.Context, _ string) ([]api.Forwarding
 	return f.forwardings, nil
 }
 
-func (f *fakeAPI) GetSecrets(_ context.Context, _, _, _, _ string) (*api.SecretsResult, error) {
+func (f *fakeAPI) GetSecrets(_ context.Context, project, env, deployment, format string) (*api.SecretsResult, error) {
+	f.lastSecretsProject = project
+	f.lastSecretsEnv = env
+	f.lastSecretsDeployment = deployment
+	f.lastSecretsFormat = format
+	if f.secretsErr != nil {
+		return nil, f.secretsErr
+	}
+	if f.secretsResult != nil {
+		return f.secretsResult, nil
+	}
 	return &api.SecretsResult{}, nil
 }
 
