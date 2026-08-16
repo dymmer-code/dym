@@ -4,6 +4,7 @@
 [![Release](https://img.shields.io/github/v/release/dymmer-code/dym?sort=semver)](https://github.com/dymmer-code/dym/releases)
 [![Go Reference](https://pkg.go.dev/badge/github.com/dymmer-code/dym.svg)](https://pkg.go.dev/github.com/dymmer-code/dym)
 [![Go version](https://img.shields.io/github/go-mod/go-version/dymmer-code/dym)](go.mod)
+[![License](https://img.shields.io/github/license/dymmer-code/dym)](LICENSE)
 
 `dym` is a command-line client for the [Dymmer](https://dymmer.com) hosting API.
 
