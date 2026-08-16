@@ -28,3 +28,13 @@ func TestResolveReturnsKeychainError(t *testing.T) {
 		t.Fatalf("Resolve() error = %v", err)
 	}
 }
+
+func TestResolveTreatsEmptyKeychainTokenAsUnavailable(t *testing.T) {
+	token, _, err := Resolve(func(string) string { return "" }, &fakeStore{token: "   "})
+	if err == nil {
+		t.Fatal("expected error for an empty/blank keychain token")
+	}
+	if token != "" {
+		t.Fatalf("token = %q, want empty", token)
+	}
+}

@@ -79,6 +79,9 @@ func (c *Client) ListRecords(ctx context.Context, domain, recordType string) ([]
 	if err := c.do(ctx, http.MethodGet, path, nil, &resp); err != nil {
 		return nil, err
 	}
+	if resp.Records == nil {
+		resp.Records = []Record{}
+	}
 	return resp.Records, nil
 }
 
@@ -128,6 +131,9 @@ func (c *Client) ListMailboxes(ctx context.Context, domain string) ([]Mailbox, e
 	if err := c.do(ctx, http.MethodGet, path, nil, &resp); err != nil {
 		return nil, err
 	}
+	if resp.Mailboxes == nil {
+		resp.Mailboxes = []Mailbox{}
+	}
 	return resp.Mailboxes, nil
 }
 
@@ -148,6 +154,9 @@ func (c *Client) ListForwardings(ctx context.Context, domain string) ([]Forwardi
 	path := "/zones/" + url.PathEscape(domain) + "/forwardings"
 	if err := c.do(ctx, http.MethodGet, path, nil, &resp); err != nil {
 		return nil, err
+	}
+	if resp.Forwardings == nil {
+		resp.Forwardings = []Forwarding{}
 	}
 	return resp.Forwardings, nil
 }

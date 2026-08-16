@@ -1,6 +1,7 @@
 package credentials
 
 import (
+	"errors"
 	"strings"
 
 	"github.com/zalando/go-keyring"
@@ -28,6 +29,9 @@ func Resolve(env func(string) string, store Store) (token, source string, err er
 	token, err = store.Get()
 	if err != nil {
 		return "", "", err
+	}
+	if strings.TrimSpace(token) == "" {
+		return "", "", errors.New("no credential available in the keychain")
 	}
 	return token, "keychain", nil
 }

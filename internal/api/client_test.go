@@ -82,6 +82,54 @@ func Test401PlainTextBodyDoesNotPanicAndHidesToken(t *testing.T) {
 	}
 }
 
+func TestNotFoundWithoutBodyPreservesAmbiguity(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer s.Close()
+
+	_, err := NewClient(s.URL, "tok", s.Client()).ListRecords(context.Background(), "example.com", "")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected *APIError, got %T", err)
+	}
+	if apiErr.Reason != "not found or not accessible" {
+		t.Fatalf("reason = %q, want %q", apiErr.Reason, "not found or not accessible")
+	}
+}
+
+func TestNetworkFailureIncludesRetrySuggestion(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	s.Close() // closed immediately: any request against it fails at the transport level.
+
+	_, err := NewClient(s.URL, "tok", s.Client()).ListRecords(context.Background(), "example.com", "")
+	if err == nil {
+		t.Fatal("expected a transport-level error")
+	}
+	if !strings.Contains(err.Error(), "check your network connection and try again") {
+		t.Fatalf("error = %q, want a retry suggestion", err.Error())
+	}
+}
+
+func TestAPIErrorFieldsAreSortedForDeterministicOutput(t *testing.T) {
+	apiErr := &APIError{
+		StatusCode: 400,
+		Reason:     "validation",
+		Errors: map[string][]string{
+			"zeta":  {"z err"},
+			"alpha": {"a err"},
+			"mid":   {"m err"},
+		},
+	}
+	want := `dymmer api: validation (status 400) [alpha: [a err], mid: [m err], zeta: [z err]]`
+	if got := apiErr.Error(); got != want {
+		t.Fatalf("Error() = %q, want %q", got, want)
+	}
+}
+
 func TestCreateRecordEncodesFlatContentFields(t *testing.T) {
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {

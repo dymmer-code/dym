@@ -39,9 +39,11 @@ func newProjectCommand(deps Dependencies) *cobra.Command {
 // once.
 func newProjectResourceTree(project string, deps Dependencies) *cobra.Command {
 	root := &cobra.Command{
-		Use:           "project-resources",
-		SilenceUsage:  true,
-		SilenceErrors: true,
+		Use:               "project-resources",
+		Annotations:       map[string]string{cobra.CommandDisplayNameAnnotation: "dym project " + project},
+		CompletionOptions: cobra.CompletionOptions{DisableDefaultCmd: true},
+		SilenceUsage:      true,
+		SilenceErrors:     true,
 	}
 	root.AddCommand(newSecretsCommand(project, deps))
 	return root

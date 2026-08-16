@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/dymmer-code/dym/internal/api"
 	"github.com/dymmer-code/dym/internal/credentials"
@@ -46,7 +47,8 @@ func resolveAPI(deps Dependencies) (APIClient, error) {
 	if baseURL == "" {
 		baseURL = defaultBaseURL
 	}
-	return api.NewClient(baseURL, token, nil), nil
+	httpClient := &http.Client{Timeout: 30 * time.Second}
+	return api.NewClient(baseURL, token, httpClient), nil
 }
 
 // wrapAuthError adds actionable login guidance to a 401 response from the
@@ -92,9 +94,11 @@ func newDomainCommand(deps Dependencies) *cobra.Command {
 // resulting error exactly once.
 func newDomainResourceTree(domain string, deps Dependencies) *cobra.Command {
 	root := &cobra.Command{
-		Use:           "domain-resources",
-		SilenceUsage:  true,
-		SilenceErrors: true,
+		Use:               "domain-resources",
+		Annotations:       map[string]string{cobra.CommandDisplayNameAnnotation: "dym domain " + domain},
+		CompletionOptions: cobra.CompletionOptions{DisableDefaultCmd: true},
+		SilenceUsage:      true,
+		SilenceErrors:     true,
 	}
 	root.AddCommand(newRecordsCommand(domain, deps))
 	root.AddCommand(newMailboxesCommand(domain, deps))

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 )
 
 // Client is a thin HTTP client for the Dymmer API. baseURL must already
@@ -43,14 +44,19 @@ func (e *APIError) Error() string {
 	if len(e.Errors) == 0 {
 		return msg
 	}
+	fields := make([]string, 0, len(e.Errors))
+	for field := range e.Errors {
+		fields = append(fields, field)
+	}
+	sort.Strings(fields)
 	first := true
 	msg += " ["
-	for field, fieldErrs := range e.Errors {
+	for _, field := range fields {
 		if !first {
 			msg += ", "
 		}
 		first = false
-		msg += fmt.Sprintf("%s: %v", field, fieldErrs)
+		msg += fmt.Sprintf("%s: %v", field, e.Errors[field])
 	}
 	msg += "]"
 	return msg
@@ -120,7 +126,7 @@ func (c *Client) doRaw(ctx context.Context, method, path string) (string, error)
 func (c *Client) send(req *http.Request) ([]byte, int, error) {
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, 0, fmt.Errorf("dymmer api request failed: %w", err)
+		return nil, 0, fmt.Errorf("dymmer api request failed: %w (check your network connection and try again)", err)
 	}
 	defer resp.Body.Close()
 
@@ -167,7 +173,7 @@ func genericReason(statusCode int) string {
 	case http.StatusForbidden:
 		return "access denied"
 	case http.StatusNotFound:
-		return "not found"
+		return "not found or not accessible"
 	case http.StatusConflict:
 		return "conflict"
 	case http.StatusBadRequest:

@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -62,6 +63,72 @@ func TestDeleteRecordReturnsDeletedRecord(t *testing.T) {
 	}
 	if rec.ID != "rec-9" {
 		t.Fatalf("unexpected record: %+v", rec)
+	}
+}
+
+func TestListRecordsNormalizesAbsentRecordsToEmptySlice(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"status":"ok"}`)
+	}))
+	defer s.Close()
+
+	records, err := NewClient(s.URL, "tok", s.Client()).ListRecords(context.Background(), "example.com", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if records == nil {
+		t.Fatal("ListRecords must return an empty slice, not nil, for an absent records field")
+	}
+	encoded, err := json.Marshal(records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(encoded) != "[]" {
+		t.Fatalf("encoded = %s, want []", encoded)
+	}
+}
+
+func TestListMailboxesNormalizesAbsentMailboxesToEmptySlice(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"status":"ok"}`)
+	}))
+	defer s.Close()
+
+	boxes, err := NewClient(s.URL, "tok", s.Client()).ListMailboxes(context.Background(), "example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if boxes == nil {
+		t.Fatal("ListMailboxes must return an empty slice, not nil, for an absent mailboxes field")
+	}
+	encoded, err := json.Marshal(boxes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(encoded) != "[]" {
+		t.Fatalf("encoded = %s, want []", encoded)
+	}
+}
+
+func TestListForwardingsNormalizesAbsentForwardingsToEmptySlice(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"status":"ok"}`)
+	}))
+	defer s.Close()
+
+	fwds, err := NewClient(s.URL, "tok", s.Client()).ListForwardings(context.Background(), "example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fwds == nil {
+		t.Fatal("ListForwardings must return an empty slice, not nil, for an absent forwardings field")
+	}
+	encoded, err := json.Marshal(fwds)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(encoded) != "[]" {
+		t.Fatalf("encoded = %s, want []", encoded)
 	}
 }
 
