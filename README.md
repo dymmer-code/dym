@@ -1,5 +1,10 @@
 # dym
 
+[![Tests](https://github.com/dymmer-code/dym/actions/workflows/test.yml/badge.svg)](https://github.com/dymmer-code/dym/actions/workflows/test.yml)
+[![Release](https://img.shields.io/github/v/release/dymmer-code/dym?sort=semver)](https://github.com/dymmer-code/dym/releases)
+[![Go Reference](https://pkg.go.dev/badge/github.com/dymmer-code/dym.svg)](https://pkg.go.dev/github.com/dymmer-code/dym)
+[![Go version](https://img.shields.io/github/go-mod/go-version/dymmer-code/dym)](go.mod)
+
 `dym` is a command-line client for the [Dymmer](https://dymmer.com) hosting API.
 
 ## Install
