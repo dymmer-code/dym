@@ -64,12 +64,12 @@ func newSecretsGetCommand(project string, deps Dependencies) *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			var wireFormat string
 			switch output {
-			case "table", "json":
+			case "table", "json", "csv", "tsv":
 				wireFormat = ""
 			case "dotenv":
 				wireFormat = ".env"
 			default:
-				return errors.New(`--output must be "table", "json", or "dotenv"`)
+				return errors.New(`--output must be "table", "json", "csv", "tsv", or "dotenv"`)
 			}
 			if wireFormat == ".env" && (len(filterArgs) > 0 || selectFields != "") {
 				return errors.New("--filter/--select cannot be combined with --output dotenv")
@@ -95,6 +95,16 @@ func newSecretsGetCommand(project string, deps Dependencies) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if output == "csv" || output == "tsv" {
+				comma := ','
+				if output == "tsv" {
+					comma = '\t'
+				}
+				if len(fields) == 0 {
+					return writeSecretsCSV(cmd.OutOrStdout(), entries, comma)
+				}
+				return writeSelectedDelimited(cmd.OutOrStdout(), rows, fields, comma)
+			}
 			if len(fields) == 0 {
 				if output == "json" {
 					return json.NewEncoder(cmd.OutOrStdout()).Encode(entries)
@@ -109,7 +119,7 @@ func newSecretsGetCommand(project string, deps Dependencies) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&env, "env", "dev", "Environment to fetch secrets for")
 	cmd.Flags().StringVar(&deployment, "deployment", "", "Deployment name (omit for the default deployment)")
-	cmd.Flags().StringVarP(&output, "output", "o", "table", `Output format: "table", "json", or "dotenv"`)
+	cmd.Flags().StringVarP(&output, "output", "o", "table", `Output format: "table", "json", "csv", "tsv", or "dotenv"`)
 	addFilterAndSelectFlags(cmd, &filterArgs, &selectFields)
 	return cmd
 }

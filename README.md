@@ -59,10 +59,10 @@ export DYMMER_TOKEN=your-token-here
 
 | Command | Description |
 | --- | --- |
-| `dym domain <domain> records list [--type <type>] [--filter field=value]... [--select fields] [-o table\|json]` | List DNS records, optionally filtered by type |
-| `dym domain <domain> records create --type <type> [flags] [--select fields] [-o table\|json]` | Create a DNS record |
-| `dym domain <domain> records update <id> --type <type> [flags] [--select fields] [-o table\|json]` | Update a DNS record (`--type` must always be resent) |
-| `dym domain <domain> records delete <id> [--yes] [--select fields] [-o table\|json]` | Delete a DNS record (prompts for confirmation unless `--yes` is given or stdin isn't a terminal, in which case `--yes` is required) |
+| `dym domain <domain> records list [--type <type>] [--filter field=value]... [--select fields] [-o table\|json\|csv\|tsv]` | List DNS records, optionally filtered by type |
+| `dym domain <domain> records create --type <type> [flags] [--select fields] [-o table\|json\|csv\|tsv]` | Create a DNS record |
+| `dym domain <domain> records update <id> --type <type> [flags] [--select fields] [-o table\|json\|csv\|tsv]` | Update a DNS record (`--type` must always be resent) |
+| `dym domain <domain> records delete <id> [--yes] [--select fields] [-o table\|json\|csv\|tsv]` | Delete a DNS record (prompts for confirmation unless `--yes` is given or stdin isn't a terminal, in which case `--yes` is required) |
 
 Content flags accepted by `create` and `update` (only the ones you set are sent to the server):
 
@@ -72,25 +72,27 @@ Content flags accepted by `create` and `update` (only the ones you set are sent 
 
 | Command | Description |
 | --- | --- |
-| `dym domain <domain> mailboxes list [--filter field=value]... [--select fields] [-o table\|json]` | List mailboxes |
+| `dym domain <domain> mailboxes list [--filter field=value]... [--select fields] [-o table\|json\|csv\|tsv]` | List mailboxes |
 
 ### `dym domain <domain> forwardings`
 
 | Command | Description |
 | --- | --- |
-| `dym domain <domain> forwardings list [--filter field=value]... [--select fields] [-o table\|json]` | List mail forwardings |
+| `dym domain <domain> forwardings list [--filter field=value]... [--select fields] [-o table\|json\|csv\|tsv]` | List mail forwardings |
 
 ### `dym project <project> secrets`
 
 | Command | Description |
 | --- | --- |
-| `dym project <project> secrets get [--env <env>] [--deployment <name>] [--filter field=value]... [--select fields] [-o table\|json\|dotenv]` | Fetch secrets for a project |
+| `dym project <project> secrets get [--env <env>] [--deployment <name>] [--filter field=value]... [--select fields] [-o table\|json\|csv\|tsv\|dotenv]` | Fetch secrets for a project |
 
-`--env` defaults to `dev`. `--deployment` is optional. `--output`/`-o` accepts `table` (default, a two-column KEY/VALUE table), `json` (an array of secret entries), or `dotenv` (the raw `.env`-formatted body). Secrets are written to stdout only; errors are written to stderr only. `--filter`/`--select` cannot be combined with `--output dotenv` (that output is the server's raw text, so field-level filtering/projection has no meaning there); using either with `--output dotenv` is an error, checked before any API call.
+`--env` defaults to `dev`. `--deployment` is optional. `--output`/`-o` accepts `table` (default, a two-column KEY/VALUE table), `json` (an array of secret entries), `csv`/`tsv` (see below), or `dotenv` (the raw `.env`-formatted body). Secrets are written to stdout only; errors are written to stderr only. `--filter`/`--select` cannot be combined with `--output dotenv` (that output is the server's raw text, so field-level filtering/projection has no meaning there); using either with `--output dotenv` is an error, checked before any API call. `--filter`/`--select` combine fine with `--output csv`/`--output tsv`, same as with `table`/`json`.
 
 ## Output
 
 Every command that prints API results defaults to a human-readable table on stdout. Pass `--output json` (`-o json`) to get JSON instead (byte-for-byte the same shape whether the result is a list or a single created/updated/deleted record); `secrets get` also accepts `--output dotenv` for the raw `.env`-formatted body. Empty lists print a `No <resource> found.` message instead of an empty table. Errors are written to stderr, and the process exits non-zero on failure.
+
+`--output csv` and `--output tsv` print the same columns as `table`, comma- or tab-separated, with values quoted per RFC 4180 when they contain the delimiter, a `"`, or a newline. Unlike `table`, they print **no header row and no messages at all** — not even the `No <resource> found.` message `table` prints for an empty result; an empty result with `--output csv`/`--output tsv` writes zero bytes.
 
 ### Narrowing and projecting output: `--filter` and `--select`
 

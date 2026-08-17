@@ -122,8 +122,8 @@ func newRecordsListCommand(domain string, deps Dependencies) *cobra.Command {
 		Use:   "list",
 		Short: "List DNS records",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if output != "table" && output != "json" {
-				return errors.New(`--output must be "table" or "json"`)
+			if output != "table" && output != "json" && output != "csv" && output != "tsv" {
+				return errors.New(`--output must be "table", "json", "csv", or "tsv"`)
 			}
 			filters, err := parseFilters(filterArgs)
 			if err != nil {
@@ -142,6 +142,16 @@ func newRecordsListCommand(domain string, deps Dependencies) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if output == "csv" || output == "tsv" {
+				comma := ','
+				if output == "tsv" {
+					comma = '\t'
+				}
+				if len(fields) == 0 {
+					return writeRecordsCSV(cmd.OutOrStdout(), records, comma)
+				}
+				return writeSelectedDelimited(cmd.OutOrStdout(), rows, fields, comma)
+			}
 			if len(fields) == 0 {
 				if output == "json" {
 					return json.NewEncoder(cmd.OutOrStdout()).Encode(records)
@@ -155,7 +165,7 @@ func newRecordsListCommand(domain string, deps Dependencies) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&recordType, "type", "", "Filter by record type (e.g. A)")
-	cmd.Flags().StringVarP(&output, "output", "o", "table", `Output format: "table" or "json"`)
+	cmd.Flags().StringVarP(&output, "output", "o", "table", `Output format: "table", "json", "csv", or "tsv"`)
 	addFilterAndSelectFlags(cmd, &filterArgs, &selectFields)
 	return cmd
 }
@@ -233,8 +243,8 @@ func newRecordsCreateCommand(domain string, deps Dependencies) *cobra.Command {
 		Use:   "create",
 		Short: "Create a DNS record",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if output != "table" && output != "json" {
-				return errors.New(`--output must be "table" or "json"`)
+			if output != "table" && output != "json" && output != "csv" && output != "tsv" {
+				return errors.New(`--output must be "table", "json", "csv", or "tsv"`)
 			}
 			if f.recordType == "" {
 				return errors.New("--type is required")
@@ -248,6 +258,20 @@ func newRecordsCreateCommand(domain string, deps Dependencies) *cobra.Command {
 			if err != nil {
 				return wrapAuthError(err)
 			}
+			if output == "csv" || output == "tsv" {
+				comma := ','
+				if output == "tsv" {
+					comma = '\t'
+				}
+				if len(fields) == 0 {
+					return writeRecordsCSV(cmd.OutOrStdout(), []api.Record{*record}, comma)
+				}
+				rows, err := toRowMaps([]api.Record{*record})
+				if err != nil {
+					return err
+				}
+				return writeSelectedDelimited(cmd.OutOrStdout(), rows, fields, comma)
+			}
 			if len(fields) == 0 {
 				if output == "json" {
 					return json.NewEncoder(cmd.OutOrStdout()).Encode(record)
@@ -265,7 +289,7 @@ func newRecordsCreateCommand(domain string, deps Dependencies) *cobra.Command {
 		},
 	}
 	addRecordFlags(cmd, f)
-	cmd.Flags().StringVarP(&output, "output", "o", "table", `Output format: "table" or "json"`)
+	cmd.Flags().StringVarP(&output, "output", "o", "table", `Output format: "table", "json", "csv", or "tsv"`)
 	addSelectFlag(cmd, &selectFields)
 	return cmd
 }
@@ -278,8 +302,8 @@ func newRecordsUpdateCommand(domain string, deps Dependencies) *cobra.Command {
 		Short: "Update a DNS record",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if output != "table" && output != "json" {
-				return errors.New(`--output must be "table" or "json"`)
+			if output != "table" && output != "json" && output != "csv" && output != "tsv" {
+				return errors.New(`--output must be "table", "json", "csv", or "tsv"`)
 			}
 			if f.recordType == "" {
 				return errors.New("--type is required (resend it even if unchanged; the server needs it to pick content validation)")
@@ -293,6 +317,20 @@ func newRecordsUpdateCommand(domain string, deps Dependencies) *cobra.Command {
 			if err != nil {
 				return wrapAuthError(err)
 			}
+			if output == "csv" || output == "tsv" {
+				comma := ','
+				if output == "tsv" {
+					comma = '\t'
+				}
+				if len(fields) == 0 {
+					return writeRecordsCSV(cmd.OutOrStdout(), []api.Record{*record}, comma)
+				}
+				rows, err := toRowMaps([]api.Record{*record})
+				if err != nil {
+					return err
+				}
+				return writeSelectedDelimited(cmd.OutOrStdout(), rows, fields, comma)
+			}
 			if len(fields) == 0 {
 				if output == "json" {
 					return json.NewEncoder(cmd.OutOrStdout()).Encode(record)
@@ -310,7 +348,7 @@ func newRecordsUpdateCommand(domain string, deps Dependencies) *cobra.Command {
 		},
 	}
 	addRecordFlags(cmd, f)
-	cmd.Flags().StringVarP(&output, "output", "o", "table", `Output format: "table" or "json"`)
+	cmd.Flags().StringVarP(&output, "output", "o", "table", `Output format: "table", "json", "csv", or "tsv"`)
 	addSelectFlag(cmd, &selectFields)
 	return cmd
 }
@@ -323,8 +361,8 @@ func newRecordsDeleteCommand(domain string, deps Dependencies) *cobra.Command {
 		Short: "Delete a DNS record",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if output != "table" && output != "json" {
-				return errors.New(`--output must be "table" or "json"`)
+			if output != "table" && output != "json" && output != "csv" && output != "tsv" {
+				return errors.New(`--output must be "table", "json", "csv", or "tsv"`)
 			}
 			id := args[0]
 			if !yes {
@@ -349,6 +387,20 @@ func newRecordsDeleteCommand(domain string, deps Dependencies) *cobra.Command {
 			if err != nil {
 				return wrapAuthError(err)
 			}
+			if output == "csv" || output == "tsv" {
+				comma := ','
+				if output == "tsv" {
+					comma = '\t'
+				}
+				if len(fields) == 0 {
+					return writeRecordsCSV(cmd.OutOrStdout(), []api.Record{*record}, comma)
+				}
+				rows, err := toRowMaps([]api.Record{*record})
+				if err != nil {
+					return err
+				}
+				return writeSelectedDelimited(cmd.OutOrStdout(), rows, fields, comma)
+			}
 			if len(fields) == 0 {
 				if output == "json" {
 					return json.NewEncoder(cmd.OutOrStdout()).Encode(record)
@@ -366,7 +418,7 @@ func newRecordsDeleteCommand(domain string, deps Dependencies) *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&yes, "yes", false, "Skip the confirmation prompt")
-	cmd.Flags().StringVarP(&output, "output", "o", "table", `Output format: "table" or "json"`)
+	cmd.Flags().StringVarP(&output, "output", "o", "table", `Output format: "table", "json", "csv", or "tsv"`)
 	addSelectFlag(cmd, &selectFields)
 	return cmd
 }
@@ -379,8 +431,8 @@ func newMailboxesCommand(domain string, deps Dependencies) *cobra.Command {
 		Use:   "list",
 		Short: "List mailboxes",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if output != "table" && output != "json" {
-				return errors.New(`--output must be "table" or "json"`)
+			if output != "table" && output != "json" && output != "csv" && output != "tsv" {
+				return errors.New(`--output must be "table", "json", "csv", or "tsv"`)
 			}
 			filters, err := parseFilters(filterArgs)
 			if err != nil {
@@ -399,6 +451,16 @@ func newMailboxesCommand(domain string, deps Dependencies) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if output == "csv" || output == "tsv" {
+				comma := ','
+				if output == "tsv" {
+					comma = '\t'
+				}
+				if len(fields) == 0 {
+					return writeMailboxesCSV(cmd.OutOrStdout(), mailboxes, comma)
+				}
+				return writeSelectedDelimited(cmd.OutOrStdout(), rows, fields, comma)
+			}
 			if len(fields) == 0 {
 				if output == "json" {
 					return json.NewEncoder(cmd.OutOrStdout()).Encode(mailboxes)
@@ -411,7 +473,7 @@ func newMailboxesCommand(domain string, deps Dependencies) *cobra.Command {
 			return writeSelectedTable(cmd.OutOrStdout(), rows, fields, "No mailboxes found.")
 		},
 	}
-	list.Flags().StringVarP(&output, "output", "o", "table", `Output format: "table" or "json"`)
+	list.Flags().StringVarP(&output, "output", "o", "table", `Output format: "table", "json", "csv", or "tsv"`)
 	addFilterAndSelectFlags(list, &filterArgs, &selectFields)
 	cmd.AddCommand(list)
 	return cmd
@@ -425,8 +487,8 @@ func newForwardingsCommand(domain string, deps Dependencies) *cobra.Command {
 		Use:   "list",
 		Short: "List mail forwardings",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if output != "table" && output != "json" {
-				return errors.New(`--output must be "table" or "json"`)
+			if output != "table" && output != "json" && output != "csv" && output != "tsv" {
+				return errors.New(`--output must be "table", "json", "csv", or "tsv"`)
 			}
 			filters, err := parseFilters(filterArgs)
 			if err != nil {
@@ -445,6 +507,16 @@ func newForwardingsCommand(domain string, deps Dependencies) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if output == "csv" || output == "tsv" {
+				comma := ','
+				if output == "tsv" {
+					comma = '\t'
+				}
+				if len(fields) == 0 {
+					return writeForwardingsCSV(cmd.OutOrStdout(), forwardings, comma)
+				}
+				return writeSelectedDelimited(cmd.OutOrStdout(), rows, fields, comma)
+			}
 			if len(fields) == 0 {
 				if output == "json" {
 					return json.NewEncoder(cmd.OutOrStdout()).Encode(forwardings)
@@ -457,7 +529,7 @@ func newForwardingsCommand(domain string, deps Dependencies) *cobra.Command {
 			return writeSelectedTable(cmd.OutOrStdout(), rows, fields, "No forwardings found.")
 		},
 	}
-	list.Flags().StringVarP(&output, "output", "o", "table", `Output format: "table" or "json"`)
+	list.Flags().StringVarP(&output, "output", "o", "table", `Output format: "table", "json", "csv", or "tsv"`)
 	addFilterAndSelectFlags(list, &filterArgs, &selectFields)
 	cmd.AddCommand(list)
 	return cmd

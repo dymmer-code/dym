@@ -741,3 +741,95 @@ func TestNoAPIAndNoCredentialsReturnsActionableError(t *testing.T) {
 		t.Fatalf("error = %q, want actionable guidance", err.Error())
 	}
 }
+
+func TestRecordsListOutputCSVNoHeader(t *testing.T) {
+	fake := &fakeAPI{records: []api.Record{
+		{ID: "r1", Type: "A", Host: "www", TimeToLive: 3600, Content: map[string]string{"ip": "203.0.113.10"}},
+	}}
+	out := new(bytes.Buffer)
+	cmd := NewRootCommand(Dependencies{Out: out, Err: new(bytes.Buffer), API: fake})
+	cmd.SetArgs([]string{"domain", "example.com", "records", "list", "--output", "csv"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	want := "r1,A,www,3600,ip=203.0.113.10\n"
+	if out.String() != want {
+		t.Fatalf("got %q, want %q", out.String(), want)
+	}
+}
+
+func TestRecordsListOutputTSVTabSeparated(t *testing.T) {
+	fake := &fakeAPI{records: []api.Record{
+		{ID: "r1", Type: "A", Host: "www", TimeToLive: 3600, Content: map[string]string{"ip": "203.0.113.10"}},
+	}}
+	out := new(bytes.Buffer)
+	cmd := NewRootCommand(Dependencies{Out: out, Err: new(bytes.Buffer), API: fake})
+	cmd.SetArgs([]string{"domain", "example.com", "records", "list", "--output", "tsv"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	want := "r1\tA\twww\t3600\tip=203.0.113.10\n"
+	if out.String() != want {
+		t.Fatalf("got %q, want %q", out.String(), want)
+	}
+}
+
+func TestRecordsListOutputCSVEmptyResultWritesZeroBytes(t *testing.T) {
+	fake := &fakeAPI{}
+	out := new(bytes.Buffer)
+	cmd := NewRootCommand(Dependencies{Out: out, Err: new(bytes.Buffer), API: fake})
+	cmd.SetArgs([]string{"domain", "example.com", "records", "list", "--output", "csv"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("expected zero bytes on stdout for an empty CSV result, got %q", out.String())
+	}
+}
+
+func TestRecordsListFilterCombinesWithCSV(t *testing.T) {
+	fake := &fakeAPI{records: []api.Record{
+		{ID: "r1", Type: "A", Host: "www", TimeToLive: 300, Content: map[string]string{"ip": "203.0.113.10"}},
+		{ID: "r2", Type: "CNAME", Host: "blog", TimeToLive: 300, Content: map[string]string{"alias": "www.example.com"}},
+	}}
+	out := new(bytes.Buffer)
+	cmd := NewRootCommand(Dependencies{Out: out, Err: new(bytes.Buffer), API: fake})
+	cmd.SetArgs([]string{"domain", "example.com", "records", "list", "--filter", "type=A", "--output", "csv"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	want := "r1,A,www,300,ip=203.0.113.10\n"
+	if out.String() != want {
+		t.Fatalf("got %q, want %q", out.String(), want)
+	}
+}
+
+func TestRecordsCreateSelectOutputTSVSingleRow(t *testing.T) {
+	fake := &fakeAPI{createResult: &api.Record{ID: "new-record", Type: "A", Host: "www"}}
+	out := new(bytes.Buffer)
+	cmd := NewRootCommand(Dependencies{Out: out, Err: new(bytes.Buffer), API: fake})
+	cmd.SetArgs([]string{
+		"domain", "example.com", "records", "create",
+		"--type", "A", "--select", "id,type", "--output", "tsv",
+	})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	want := "new-record\tA\n"
+	if out.String() != want {
+		t.Fatalf("got %q, want %q", out.String(), want)
+	}
+}
+
+func TestRecordsListInvalidOutputErrorMentionsCSVAndTSV(t *testing.T) {
+	fake := &fakeAPI{}
+	cmd := NewRootCommand(Dependencies{Out: new(bytes.Buffer), Err: new(bytes.Buffer), API: fake})
+	cmd.SetArgs([]string{"domain", "example.com", "records", "list", "--output", "yaml"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for invalid --output")
+	}
+	if !strings.Contains(err.Error(), "csv") || !strings.Contains(err.Error(), "tsv") {
+		t.Fatalf("error = %q, want it to mention csv and tsv", err.Error())
+	}
+}

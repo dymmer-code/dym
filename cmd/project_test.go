@@ -214,3 +214,48 @@ func TestSecretsGenericErrorPropagatesWithoutStdout(t *testing.T) {
 		t.Fatalf("stdout must be empty on error, got %q", out.String())
 	}
 }
+
+func TestSecretsGetOutputCSVNoHeader(t *testing.T) {
+	fake := &fakeAPI{secretsResult: &api.SecretsResult{Entries: []api.SecretEntry{
+		{Key: "API_KEY", Value: "s3cr3t"},
+		{Key: "OTHER", Value: "val"},
+	}}}
+	out := new(bytes.Buffer)
+	cmd := NewRootCommand(Dependencies{API: fake, Out: out, Err: new(bytes.Buffer)})
+	cmd.SetArgs([]string{"project", "demo", "secrets", "get", "--output", "csv"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	want := "API_KEY,s3cr3t\nOTHER,val\n"
+	if out.String() != want {
+		t.Fatalf("got %q, want %q", out.String(), want)
+	}
+}
+
+func TestSecretsGetOutputCSVAndTSVDoNotTriggerDotenvConflict(t *testing.T) {
+	for _, output := range []string{"csv", "tsv"} {
+		fake := &fakeAPI{secretsResult: &api.SecretsResult{Entries: []api.SecretEntry{{Key: "API_KEY", Value: "s3cr3t"}}}}
+		out := new(bytes.Buffer)
+		cmd := NewRootCommand(Dependencies{API: fake, Out: out, Err: new(bytes.Buffer)})
+		cmd.SetArgs([]string{"project", "demo", "secrets", "get", "--output", output, "--filter", "key=API_KEY", "--select", "key"})
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("--output %s combined with --filter/--select must not error: %v", output, err)
+		}
+		if fake.lastSecretsProject != "demo" {
+			t.Fatalf("--output %s must still call GetSecrets", output)
+		}
+	}
+}
+
+func TestSecretsInvalidOutputErrorMentionsCSVAndTSV(t *testing.T) {
+	fake := &fakeAPI{}
+	cmd := NewRootCommand(Dependencies{API: fake, Out: new(bytes.Buffer), Err: new(bytes.Buffer)})
+	cmd.SetArgs([]string{"project", "demo", "secrets", "get", "--output", "yaml"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for invalid --output")
+	}
+	if !strings.Contains(err.Error(), "csv") || !strings.Contains(err.Error(), "tsv") {
+		t.Fatalf("error = %q, want it to mention csv and tsv", err.Error())
+	}
+}
