@@ -88,6 +88,15 @@ Content flags accepted by `create` and `update` (only the ones you set are sent 
 
 `--env` defaults to `dev`. `--deployment` is optional. `--output`/`-o` accepts `table` (default, a two-column KEY/VALUE table), `json` (an array of secret entries), `csv`/`tsv` (see below), or `dotenv` (the raw `.env`-formatted body). Secrets are written to stdout only; errors are written to stderr only. `--filter`/`--select` cannot be combined with `--output dotenv` (that output is the server's raw text, so field-level filtering/projection has no meaning there); using either with `--output dotenv` is an error, checked before any API call. `--filter`/`--select` combine fine with `--output csv`/`--output tsv`, same as with `table`/`json`.
 
+### `dym ext`
+
+| Command | Description |
+| --- | --- |
+| `dym ext list` | List extensions declared in the extensions file |
+| `dym ext <name> [params...] [--filter field=value]... [--select fields] [-o table\|json\|csv\|tsv]` | Run a user-defined extension (flags omitted when the extension sets `response_template`) |
+
+See [Extensions](#extensions) below for the config file and schema.
+
 ## Output
 
 Every command that prints API results defaults to a human-readable table on stdout. Pass `--output json` (`-o json`) to get JSON instead (byte-for-byte the same shape whether the result is a list or a single created/updated/deleted record); `secrets get` also accepts `--output dotenv` for the raw `.env`-formatted body. Empty lists print a `No <resource> found.` message instead of an empty table. Errors are written to stderr, and the process exits non-zero on failure.
@@ -108,3 +117,112 @@ Field names are the API's real JSON field names, not always the same as the CLI'
 **`--filter field=value`** (repeatable, AND-combined) keeps only rows where `field` equals `value`; `--filter field!=value` keeps rows where it doesn't. Repeat the flag to combine multiple conditions, e.g. `--filter type=A --filter host=www` keeps only rows matching both. Comparison is by string representation on both sides — no numeric/boolean-aware comparison. For `forwardings`' `destination` field (a list of addresses), `--filter destination=someone@example.com` matches if that address is *one of* the destinations, not if the whole list equals it. A field that doesn't resolve on a row (a typo, or a content key that record type doesn't have) simply excludes that row — it's not an error. A malformed `--filter` value (missing `=` entirely) is an error, reported before any API call. `--filter` only applies to commands that list rows: `records list`, `mailboxes list`, `forwardings list`, `secrets get`.
 
 **`--select field1,field2,...`** (comma-separated, single flag) reduces which fields are shown, in the given order — for both `--output table` (columns become the selected fields, headers uppercased, e.g. `content.ip` -> `CONTENT.IP`) and `--output json` (each object contains exactly those keys, in that order; a field that doesn't resolve on a row renders as an empty table cell or JSON `null`). `--select` applies everywhere a command renders a result: the four list commands above, plus `records create`/`update`/`delete` (projecting the fields of the single created/updated/deleted record). Leaving `--select` unset keeps the existing fixed-column table / full-object JSON output unchanged.
+
+## Extensions
+
+`dym` ships with **zero** extensions by default. `dym ext` is a generic escape hatch: a YAML config file where you declare arbitrary HTTP calls against Dymmer (or Dymmer-adjacent) endpoints `dym` doesn't have a built-in command for, and `dym` turns each declared entry into a real subcommand — `dym ext <name>` — with no code changes required.
+
+### Config file location
+
+By default `dym` looks for the extensions file at your OS's standard config directory:
+
+- Linux: `$XDG_CONFIG_HOME/dym/extensions.yaml` (or `~/.config/dym/extensions.yaml`)
+- macOS: `~/Library/Application Support/dym/extensions.yaml`
+- Windows: `%AppData%\dym\extensions.yaml`
+
+Override order (highest priority first):
+
+1. `--extensions-file <path>` flag, on `dym ext` and any of its subcommands
+2. `DYM_EXTENSIONS_FILE` environment variable
+3. the default location above
+
+If no extensions file exists, `dym ext list` says so and every other `dym ext <name>` invocation behaves like any other unknown command — nothing breaks, and every other `dym` command is unaffected. If the file exists but is malformed or an individual extension fails validation, that extension (or, for unparseable YAML, the whole file) is skipped; other, valid extensions in the same file still load and work, and `dym ext list` reports what failed.
+
+### Schema
+
+```yaml
+extensions:
+  mail-domains:
+    description: "Authorized mail-server domains (internal endpoint, no auth)"
+    url: "{{.BaseURL}}/internal/v1/mail_servers/domains"
+    method: GET                # optional, default GET
+    auth: none                 # optional, default "none"; or "bearer"
+    response_path: domains     # dot path into the JSON response where the row array lives; omitted = response body itself is the array
+    params: []                 # optional, default []; declared positional parameter names, in order
+
+  create-dkim-txt:
+    url: "{{.BaseURL}}/api/v1/zones/{{.Args.domain}}/records"
+    method: POST
+    auth: bearer                # token defaults to "{{.DymmerToken}}" when unset
+    params: [domain, value]
+    request_template: |
+      {"record":{"host":"mail._domainkey","type":"TXT","content_value":"{{.Args.value}}"}}
+    response_path: record
+```
+
+Field reference (all under a top-level `extensions:` map keyed by extension name):
+
+| Field | Required | Description |
+| --- | --- | --- |
+| `description` | no | Shown by `dym ext list` |
+| `url` | **yes** | A Go [`text/template`](https://pkg.go.dev/text/template), rendered before every call against `{BaseURL, DymmerToken, Args}` |
+| `method` | no | `GET` (default), `POST`, `PUT`, `PATCH`, or `DELETE` (case-insensitive) |
+| `auth` | no | `none` (default) or `bearer` |
+| `token` | no | A template for the bearer token; only meaningful when `auth: bearer`, defaults to `"{{.DymmerToken}}"`; an error if set alongside `auth: none` |
+| `params` | no | Positional parameter names, in order; the generated subcommand requires exactly this many args, and its `--help` shows them, e.g. `dym ext zone-txt-records <domain>` |
+| `request_template` | no | A Go template rendered against the same data as `url`, sent as the request body; must render to valid JSON; only valid when `method` is not `GET`; when set, `Content-Type: application/json` is set automatically |
+| `response_path` | no | Dot-separated path into the decoded JSON response where the row array lives (e.g. `domains`, or nested like `data.items`); omitted means the response body itself is the array. Mutually exclusive with `response_template` |
+| `response_template` | no | A Go template rendered directly against the decoded JSON response; its output is written to stdout verbatim (no added newline — you own your own newlines). When set, `--filter`/`--select`/`--output` are **not** registered on that subcommand: the template fully owns the output shape |
+
+Inside `url`, `token`, and `request_template`, templates render against:
+
+```go
+{
+  BaseURL     string            // the Dymmer API base URL
+  DymmerToken string            // resolved lazily, only when auth: bearer; empty otherwise
+  Args        map[string]string // declared params, keyed by name, e.g. {{.Args.domain}}
+}
+```
+
+`response_template` instead renders directly against the decoded JSON response body (so `{"domains":["a.com"]}` is addressed as `{{range .domains}}{{.}}\n{{end}}`, not wrapped in anything else).
+
+When `response_path` is used (i.e. no `response_template`), the resolved array becomes rows for `--filter`/`--select`/`--output table|json|csv|tsv`, same as `records list`/`mailboxes list`/etc.: object elements become rows as-is; scalar elements (a plain array of strings, say) are wrapped as `{"value": <elem>}`. With no `--select`, the default columns are the sorted union of every row's keys (extensions don't have a fixed per-endpoint column set the way built-in commands do).
+
+### Worked examples
+
+**GET with `response_path`** — list domains from an internal, unauthenticated endpoint:
+
+```yaml
+extensions:
+  mail-domains:
+    description: "Authorized mail-server domains"
+    url: "{{.BaseURL}}/internal/v1/mail_servers/domains"
+    auth: none
+    response_path: domains
+```
+
+```sh
+$ dym ext mail-domains
+VALUE
+a.example.com
+b.example.com
+```
+
+**POST with `request_template`** — create a DKIM TXT record, authenticated with your Dymmer token:
+
+```yaml
+extensions:
+  create-dkim-txt:
+    url: "{{.BaseURL}}/api/v1/zones/{{.Args.domain}}/records"
+    method: POST
+    auth: bearer
+    params: [domain, value]
+    request_template: |
+      {"record":{"host":"mail._domainkey","type":"TXT","content_value":"{{.Args.value}}"}}
+```
+
+```sh
+dym ext create-dkim-txt example.com "v=DKIM1; k=rsa; p=..."
+```
+
+Both examples are illustrative — write your own `extensions.yaml` for whatever internal or Dymmer-adjacent endpoints your workflow needs; `dym` has no bundled extensions.

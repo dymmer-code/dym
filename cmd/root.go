@@ -34,6 +34,12 @@ type Dependencies struct {
 	// Confirm prompts the user with a yes/no question and reports the
 	// answer. It defaults to a real stderr/stdin prompt (internal/confirm).
 	Confirm func(prompt string) (bool, error)
+	// ExtensionsFile, when non-empty, is used directly as the path to the
+	// user-defined extensions.yaml (see ext.go), bypassing the
+	// --extensions-file flag/DYM_EXTENSIONS_FILE env var/default-location
+	// resolution entirely. Left empty in production; tests set it directly
+	// to point at a scratch file rather than faking env vars or flags.
+	ExtensionsFile string
 }
 
 func NewRootCommand(deps Dependencies) *cobra.Command {
@@ -69,6 +75,7 @@ func NewRootCommand(deps Dependencies) *cobra.Command {
 	cmd.AddCommand(newAuthCommand(deps))
 	cmd.AddCommand(newDomainCommand(deps))
 	cmd.AddCommand(newProjectCommand(deps))
+	cmd.AddCommand(newExtCommand(deps))
 	return cmd
 }
 
