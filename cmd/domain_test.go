@@ -562,6 +562,167 @@ func TestUnauthorizedErrorSuggestsLogin(t *testing.T) {
 	}
 }
 
+func TestRecordsListFilterByTypeExcludesNonMatching(t *testing.T) {
+	fake := &fakeAPI{records: []api.Record{
+		{ID: "r1", Type: "A", Host: "www", Content: map[string]string{"ip": "203.0.113.10"}},
+		{ID: "r2", Type: "CNAME", Host: "mail", Content: map[string]string{"alias": "www"}},
+	}}
+	out := new(bytes.Buffer)
+	cmd := NewRootCommand(Dependencies{Out: out, Err: new(bytes.Buffer), API: fake})
+	cmd.SetArgs([]string{"domain", "example.com", "records", "list", "--filter", "type=A", "--output", "json"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	var got []api.Record
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("stdout not valid JSON: %v (%q)", err, out.String())
+	}
+	if len(got) != 1 || got[0].ID != "r1" {
+		t.Fatalf("decoded records = %+v, want only r1", got)
+	}
+}
+
+func TestRecordsListFilterByContentKey(t *testing.T) {
+	fake := &fakeAPI{records: []api.Record{
+		{ID: "r1", Type: "A", Host: "www", Content: map[string]string{"ip": "203.0.113.10"}},
+		{ID: "r2", Type: "A", Host: "mail", Content: map[string]string{"ip": "203.0.113.20"}},
+	}}
+	out := new(bytes.Buffer)
+	cmd := NewRootCommand(Dependencies{Out: out, Err: new(bytes.Buffer), API: fake})
+	cmd.SetArgs([]string{"domain", "example.com", "records", "list", "--filter", "content.ip=203.0.113.10", "--output", "json"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	var got []api.Record
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("stdout not valid JSON: %v (%q)", err, out.String())
+	}
+	if len(got) != 1 || got[0].ID != "r1" {
+		t.Fatalf("decoded records = %+v, want only r1", got)
+	}
+}
+
+func TestRecordsListSelectProducesTwoColumnTable(t *testing.T) {
+	fake := &fakeAPI{records: []api.Record{
+		{ID: "r1", Type: "A", Host: "www", TimeToLive: 300, Content: map[string]string{"ip": "203.0.113.10"}},
+	}}
+	out := new(bytes.Buffer)
+	cmd := NewRootCommand(Dependencies{Out: out, Err: new(bytes.Buffer), API: fake})
+	cmd.SetArgs([]string{"domain", "example.com", "records", "list", "--select", "id,type"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimRight(out.String(), "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected header + 1 row, got %d lines: %q", len(lines), out.String())
+	}
+	if !strings.Contains(lines[0], "ID") || !strings.Contains(lines[0], "TYPE") {
+		t.Fatalf("header = %q, want ID and TYPE columns", lines[0])
+	}
+	if strings.Contains(lines[0], "HOST") || strings.Contains(lines[0], "TTL") || strings.Contains(lines[0], "CONTENT") {
+		t.Fatalf("header = %q, want only selected columns", lines[0])
+	}
+}
+
+func TestRecordsListSelectJSONExactKeyOrder(t *testing.T) {
+	fake := &fakeAPI{records: []api.Record{
+		{ID: "r1", Type: "A", Host: "www", TimeToLive: 300, Content: map[string]string{"ip": "203.0.113.10"}},
+	}}
+	out := new(bytes.Buffer)
+	cmd := NewRootCommand(Dependencies{Out: out, Err: new(bytes.Buffer), API: fake})
+	cmd.SetArgs([]string{"domain", "example.com", "records", "list", "--select", "id,type", "--output", "json"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	want := `[{"id":"r1","type":"A"}]` + "\n"
+	if out.String() != want {
+		t.Fatalf("output = %q, want %q", out.String(), want)
+	}
+}
+
+func TestRecordsCreateSelectSingleField(t *testing.T) {
+	fake := &fakeAPI{createResult: &api.Record{ID: "new-record", Type: "A", Host: "www"}}
+	out := new(bytes.Buffer)
+	cmd := NewRootCommand(Dependencies{Out: out, Err: new(bytes.Buffer), API: fake})
+	cmd.SetArgs([]string{"domain", "example.com", "records", "create", "--type", "A", "--select", "id", "--output", "json"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	want := `{"id":"new-record"}` + "\n"
+	if out.String() != want {
+		t.Fatalf("output = %q, want %q", out.String(), want)
+	}
+}
+
+func TestMailboxesListFilterByEnabled(t *testing.T) {
+	fake := &fakeAPI{mailboxes: []api.Mailbox{
+		{Username: "alice", Enabled: true},
+		{Username: "bob", Enabled: false},
+	}}
+	out := new(bytes.Buffer)
+	cmd := NewRootCommand(Dependencies{Out: out, Err: new(bytes.Buffer), API: fake})
+	cmd.SetArgs([]string{"domain", "example.com", "mailboxes", "list", "--filter", "enabled=true", "--output", "json"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	var got []api.Mailbox
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("stdout not valid JSON: %v (%q)", err, out.String())
+	}
+	if len(got) != 1 || got[0].Username != "alice" {
+		t.Fatalf("decoded mailboxes = %+v, want only alice", got)
+	}
+}
+
+func TestForwardingsListFilterByDestinationMembership(t *testing.T) {
+	fake := &fakeAPI{forwardings: []api.Forwarding{
+		{Username: "alice", Destination: []string{"someone@example.com", "other@example.com"}, Enabled: true},
+		{Username: "bob", Destination: []string{"nobody@example.com"}, Enabled: true},
+	}}
+	out := new(bytes.Buffer)
+	cmd := NewRootCommand(Dependencies{Out: out, Err: new(bytes.Buffer), API: fake})
+	cmd.SetArgs([]string{"domain", "example.com", "forwardings", "list", "--filter", "destination=someone@example.com", "--output", "json"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	var got []api.Forwarding
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("stdout not valid JSON: %v (%q)", err, out.String())
+	}
+	if len(got) != 1 || got[0].Username != "alice" {
+		t.Fatalf("decoded forwardings = %+v, want only alice", got)
+	}
+}
+
+func TestRecordsListMalformedFilterErrorsWithoutCallingAPI(t *testing.T) {
+	fake := &fakeAPI{}
+	cmd := NewRootCommand(Dependencies{Out: new(bytes.Buffer), Err: new(bytes.Buffer), API: fake})
+	cmd.SetArgs([]string{"domain", "example.com", "records", "list", "--filter", "no-equals-sign"})
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("expected error for malformed --filter")
+	}
+	if fake.lastListDomain != "" {
+		t.Fatal("must not call ListRecords with a malformed --filter")
+	}
+}
+
+func TestRecordsListNoSelectJSONUnchanged(t *testing.T) {
+	fake := &fakeAPI{records: []api.Record{{ID: "r1", Type: "A", Host: "www", TimeToLive: 300, Content: map[string]string{"ip": "203.0.113.10"}}}}
+	out := new(bytes.Buffer)
+	cmd := NewRootCommand(Dependencies{Out: out, Err: new(bytes.Buffer), API: fake})
+	cmd.SetArgs([]string{"domain", "example.com", "records", "list", "--output", "json"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	want, err := json.Marshal(fake.records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.String() != string(want)+"\n" {
+		t.Fatalf("output = %q, want %q", out.String(), string(want)+"\n")
+	}
+}
+
 func TestNoAPIAndNoCredentialsReturnsActionableError(t *testing.T) {
 	store := &fakeStore{err: errors.New("keychain unavailable")}
 	cmd := NewRootCommand(Dependencies{

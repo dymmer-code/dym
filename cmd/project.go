@@ -56,7 +56,8 @@ func newSecretsCommand(project string, deps Dependencies) *cobra.Command {
 }
 
 func newSecretsGetCommand(project string, deps Dependencies) *cobra.Command {
-	var env, deployment, output string
+	var env, deployment, output, selectFields string
+	var filterArgs []string
 	cmd := &cobra.Command{
 		Use:   "get",
 		Short: "Fetch secrets for a project",
@@ -70,6 +71,14 @@ func newSecretsGetCommand(project string, deps Dependencies) *cobra.Command {
 			default:
 				return errors.New(`--output must be "table", "json", or "dotenv"`)
 			}
+			if wireFormat == ".env" && (len(filterArgs) > 0 || selectFields != "") {
+				return errors.New("--filter/--select cannot be combined with --output dotenv")
+			}
+			filters, err := parseFilters(filterArgs)
+			if err != nil {
+				return err
+			}
+			fields := parseSelect(selectFields)
 			client, err := resolveAPI(deps)
 			if err != nil {
 				return err
@@ -82,14 +91,25 @@ func newSecretsGetCommand(project string, deps Dependencies) *cobra.Command {
 				_, err := io.WriteString(cmd.OutOrStdout(), result.Raw)
 				return err
 			}
-			if output == "json" {
-				return json.NewEncoder(cmd.OutOrStdout()).Encode(result.Entries)
+			entries, rows, err := applyFilters(result.Entries, filters)
+			if err != nil {
+				return err
 			}
-			return writeSecretsTable(cmd.OutOrStdout(), result.Entries)
+			if len(fields) == 0 {
+				if output == "json" {
+					return json.NewEncoder(cmd.OutOrStdout()).Encode(entries)
+				}
+				return writeSecretsTable(cmd.OutOrStdout(), entries)
+			}
+			if output == "json" {
+				return writeSelectedJSON(cmd.OutOrStdout(), rows, fields, true)
+			}
+			return writeSelectedTable(cmd.OutOrStdout(), rows, fields, "No secrets found.")
 		},
 	}
 	cmd.Flags().StringVar(&env, "env", "dev", "Environment to fetch secrets for")
 	cmd.Flags().StringVar(&deployment, "deployment", "", "Deployment name (omit for the default deployment)")
 	cmd.Flags().StringVarP(&output, "output", "o", "table", `Output format: "table", "json", or "dotenv"`)
+	addFilterAndSelectFlags(cmd, &filterArgs, &selectFields)
 	return cmd
 }

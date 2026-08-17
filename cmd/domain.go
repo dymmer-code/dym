@@ -116,7 +116,8 @@ func newRecordsCommand(domain string, deps Dependencies) *cobra.Command {
 }
 
 func newRecordsListCommand(domain string, deps Dependencies) *cobra.Command {
-	var recordType, output string
+	var recordType, output, selectFields string
+	var filterArgs []string
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List DNS records",
@@ -124,6 +125,11 @@ func newRecordsListCommand(domain string, deps Dependencies) *cobra.Command {
 			if output != "table" && output != "json" {
 				return errors.New(`--output must be "table" or "json"`)
 			}
+			filters, err := parseFilters(filterArgs)
+			if err != nil {
+				return err
+			}
+			fields := parseSelect(selectFields)
 			client, err := resolveAPI(deps)
 			if err != nil {
 				return err
@@ -132,14 +138,25 @@ func newRecordsListCommand(domain string, deps Dependencies) *cobra.Command {
 			if err != nil {
 				return wrapAuthError(err)
 			}
-			if output == "json" {
-				return json.NewEncoder(cmd.OutOrStdout()).Encode(records)
+			records, rows, err := applyFilters(records, filters)
+			if err != nil {
+				return err
 			}
-			return writeRecordsTable(cmd.OutOrStdout(), records)
+			if len(fields) == 0 {
+				if output == "json" {
+					return json.NewEncoder(cmd.OutOrStdout()).Encode(records)
+				}
+				return writeRecordsTable(cmd.OutOrStdout(), records)
+			}
+			if output == "json" {
+				return writeSelectedJSON(cmd.OutOrStdout(), rows, fields, true)
+			}
+			return writeSelectedTable(cmd.OutOrStdout(), rows, fields, "No records found.")
 		},
 	}
 	cmd.Flags().StringVar(&recordType, "type", "", "Filter by record type (e.g. A)")
 	cmd.Flags().StringVarP(&output, "output", "o", "table", `Output format: "table" or "json"`)
+	addFilterAndSelectFlags(cmd, &filterArgs, &selectFields)
 	return cmd
 }
 
@@ -211,7 +228,7 @@ func (f *recordFlags) toInput(cmd *cobra.Command) api.RecordInput {
 
 func newRecordsCreateCommand(domain string, deps Dependencies) *cobra.Command {
 	f := &recordFlags{}
-	var output string
+	var output, selectFields string
 	cmd := &cobra.Command{
 		Use:   "create",
 		Short: "Create a DNS record",
@@ -222,6 +239,7 @@ func newRecordsCreateCommand(domain string, deps Dependencies) *cobra.Command {
 			if f.recordType == "" {
 				return errors.New("--type is required")
 			}
+			fields := parseSelect(selectFields)
 			client, err := resolveAPI(deps)
 			if err != nil {
 				return err
@@ -230,20 +248,31 @@ func newRecordsCreateCommand(domain string, deps Dependencies) *cobra.Command {
 			if err != nil {
 				return wrapAuthError(err)
 			}
-			if output == "json" {
-				return json.NewEncoder(cmd.OutOrStdout()).Encode(record)
+			if len(fields) == 0 {
+				if output == "json" {
+					return json.NewEncoder(cmd.OutOrStdout()).Encode(record)
+				}
+				return writeRecordsTable(cmd.OutOrStdout(), []api.Record{*record})
 			}
-			return writeRecordsTable(cmd.OutOrStdout(), []api.Record{*record})
+			rows, err := toRowMaps([]api.Record{*record})
+			if err != nil {
+				return err
+			}
+			if output == "json" {
+				return writeSelectedJSON(cmd.OutOrStdout(), rows, fields, false)
+			}
+			return writeSelectedTable(cmd.OutOrStdout(), rows, fields, "")
 		},
 	}
 	addRecordFlags(cmd, f)
 	cmd.Flags().StringVarP(&output, "output", "o", "table", `Output format: "table" or "json"`)
+	addSelectFlag(cmd, &selectFields)
 	return cmd
 }
 
 func newRecordsUpdateCommand(domain string, deps Dependencies) *cobra.Command {
 	f := &recordFlags{}
-	var output string
+	var output, selectFields string
 	cmd := &cobra.Command{
 		Use:   "update <id>",
 		Short: "Update a DNS record",
@@ -255,6 +284,7 @@ func newRecordsUpdateCommand(domain string, deps Dependencies) *cobra.Command {
 			if f.recordType == "" {
 				return errors.New("--type is required (resend it even if unchanged; the server needs it to pick content validation)")
 			}
+			fields := parseSelect(selectFields)
 			client, err := resolveAPI(deps)
 			if err != nil {
 				return err
@@ -263,20 +293,31 @@ func newRecordsUpdateCommand(domain string, deps Dependencies) *cobra.Command {
 			if err != nil {
 				return wrapAuthError(err)
 			}
-			if output == "json" {
-				return json.NewEncoder(cmd.OutOrStdout()).Encode(record)
+			if len(fields) == 0 {
+				if output == "json" {
+					return json.NewEncoder(cmd.OutOrStdout()).Encode(record)
+				}
+				return writeRecordsTable(cmd.OutOrStdout(), []api.Record{*record})
 			}
-			return writeRecordsTable(cmd.OutOrStdout(), []api.Record{*record})
+			rows, err := toRowMaps([]api.Record{*record})
+			if err != nil {
+				return err
+			}
+			if output == "json" {
+				return writeSelectedJSON(cmd.OutOrStdout(), rows, fields, false)
+			}
+			return writeSelectedTable(cmd.OutOrStdout(), rows, fields, "")
 		},
 	}
 	addRecordFlags(cmd, f)
 	cmd.Flags().StringVarP(&output, "output", "o", "table", `Output format: "table" or "json"`)
+	addSelectFlag(cmd, &selectFields)
 	return cmd
 }
 
 func newRecordsDeleteCommand(domain string, deps Dependencies) *cobra.Command {
 	var yes bool
-	var output string
+	var output, selectFields string
 	cmd := &cobra.Command{
 		Use:   "delete <id>",
 		Short: "Delete a DNS record",
@@ -299,6 +340,7 @@ func newRecordsDeleteCommand(domain string, deps Dependencies) *cobra.Command {
 					return errors.New("deletion cancelled")
 				}
 			}
+			fields := parseSelect(selectFields)
 			client, err := resolveAPI(deps)
 			if err != nil {
 				return err
@@ -307,20 +349,32 @@ func newRecordsDeleteCommand(domain string, deps Dependencies) *cobra.Command {
 			if err != nil {
 				return wrapAuthError(err)
 			}
-			if output == "json" {
-				return json.NewEncoder(cmd.OutOrStdout()).Encode(record)
+			if len(fields) == 0 {
+				if output == "json" {
+					return json.NewEncoder(cmd.OutOrStdout()).Encode(record)
+				}
+				return writeRecordsTable(cmd.OutOrStdout(), []api.Record{*record})
 			}
-			return writeRecordsTable(cmd.OutOrStdout(), []api.Record{*record})
+			rows, err := toRowMaps([]api.Record{*record})
+			if err != nil {
+				return err
+			}
+			if output == "json" {
+				return writeSelectedJSON(cmd.OutOrStdout(), rows, fields, false)
+			}
+			return writeSelectedTable(cmd.OutOrStdout(), rows, fields, "")
 		},
 	}
 	cmd.Flags().BoolVar(&yes, "yes", false, "Skip the confirmation prompt")
 	cmd.Flags().StringVarP(&output, "output", "o", "table", `Output format: "table" or "json"`)
+	addSelectFlag(cmd, &selectFields)
 	return cmd
 }
 
 func newMailboxesCommand(domain string, deps Dependencies) *cobra.Command {
 	cmd := &cobra.Command{Use: "mailboxes", Short: "Manage mailboxes"}
-	var output string
+	var output, selectFields string
+	var filterArgs []string
 	list := &cobra.Command{
 		Use:   "list",
 		Short: "List mailboxes",
@@ -328,6 +382,11 @@ func newMailboxesCommand(domain string, deps Dependencies) *cobra.Command {
 			if output != "table" && output != "json" {
 				return errors.New(`--output must be "table" or "json"`)
 			}
+			filters, err := parseFilters(filterArgs)
+			if err != nil {
+				return err
+			}
+			fields := parseSelect(selectFields)
 			client, err := resolveAPI(deps)
 			if err != nil {
 				return err
@@ -336,20 +395,32 @@ func newMailboxesCommand(domain string, deps Dependencies) *cobra.Command {
 			if err != nil {
 				return wrapAuthError(err)
 			}
-			if output == "json" {
-				return json.NewEncoder(cmd.OutOrStdout()).Encode(mailboxes)
+			mailboxes, rows, err := applyFilters(mailboxes, filters)
+			if err != nil {
+				return err
 			}
-			return writeMailboxesTable(cmd.OutOrStdout(), mailboxes)
+			if len(fields) == 0 {
+				if output == "json" {
+					return json.NewEncoder(cmd.OutOrStdout()).Encode(mailboxes)
+				}
+				return writeMailboxesTable(cmd.OutOrStdout(), mailboxes)
+			}
+			if output == "json" {
+				return writeSelectedJSON(cmd.OutOrStdout(), rows, fields, true)
+			}
+			return writeSelectedTable(cmd.OutOrStdout(), rows, fields, "No mailboxes found.")
 		},
 	}
 	list.Flags().StringVarP(&output, "output", "o", "table", `Output format: "table" or "json"`)
+	addFilterAndSelectFlags(list, &filterArgs, &selectFields)
 	cmd.AddCommand(list)
 	return cmd
 }
 
 func newForwardingsCommand(domain string, deps Dependencies) *cobra.Command {
 	cmd := &cobra.Command{Use: "forwardings", Short: "Manage mail forwardings"}
-	var output string
+	var output, selectFields string
+	var filterArgs []string
 	list := &cobra.Command{
 		Use:   "list",
 		Short: "List mail forwardings",
@@ -357,6 +428,11 @@ func newForwardingsCommand(domain string, deps Dependencies) *cobra.Command {
 			if output != "table" && output != "json" {
 				return errors.New(`--output must be "table" or "json"`)
 			}
+			filters, err := parseFilters(filterArgs)
+			if err != nil {
+				return err
+			}
+			fields := parseSelect(selectFields)
 			client, err := resolveAPI(deps)
 			if err != nil {
 				return err
@@ -365,13 +441,24 @@ func newForwardingsCommand(domain string, deps Dependencies) *cobra.Command {
 			if err != nil {
 				return wrapAuthError(err)
 			}
-			if output == "json" {
-				return json.NewEncoder(cmd.OutOrStdout()).Encode(forwardings)
+			forwardings, rows, err := applyFilters(forwardings, filters)
+			if err != nil {
+				return err
 			}
-			return writeForwardingsTable(cmd.OutOrStdout(), forwardings)
+			if len(fields) == 0 {
+				if output == "json" {
+					return json.NewEncoder(cmd.OutOrStdout()).Encode(forwardings)
+				}
+				return writeForwardingsTable(cmd.OutOrStdout(), forwardings)
+			}
+			if output == "json" {
+				return writeSelectedJSON(cmd.OutOrStdout(), rows, fields, true)
+			}
+			return writeSelectedTable(cmd.OutOrStdout(), rows, fields, "No forwardings found.")
 		},
 	}
 	list.Flags().StringVarP(&output, "output", "o", "table", `Output format: "table" or "json"`)
+	addFilterAndSelectFlags(list, &filterArgs, &selectFields)
 	cmd.AddCommand(list)
 	return cmd
 }

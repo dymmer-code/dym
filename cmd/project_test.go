@@ -158,6 +158,50 @@ func TestSecretsAPIErrorPropagatesViaWrapAuthErrorWithoutStdout(t *testing.T) {
 	}
 }
 
+func TestSecretsGetFilterByKey(t *testing.T) {
+	fake := &fakeAPI{secretsResult: &api.SecretsResult{Entries: []api.SecretEntry{
+		{Key: "API_KEY", Value: "secret1"},
+		{Key: "OTHER", Value: "secret2"},
+	}}}
+	out := new(bytes.Buffer)
+	cmd := NewRootCommand(Dependencies{API: fake, Out: out, Err: new(bytes.Buffer)})
+	cmd.SetArgs([]string{"project", "demo", "secrets", "get", "--filter", "key=API_KEY", "--output", "json"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	var got []api.SecretEntry
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("stdout not valid JSON: %v (%q)", err, out.String())
+	}
+	if len(got) != 1 || got[0].Key != "API_KEY" {
+		t.Fatalf("decoded entries = %+v, want only API_KEY", got)
+	}
+}
+
+func TestSecretsGetDotenvWithSelectErrorsWithoutCallingAPI(t *testing.T) {
+	fake := &fakeAPI{}
+	cmd := NewRootCommand(Dependencies{API: fake, Out: new(bytes.Buffer), Err: new(bytes.Buffer)})
+	cmd.SetArgs([]string{"project", "demo", "secrets", "get", "--output", "dotenv", "--select", "key"})
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("expected error combining --select with --output dotenv")
+	}
+	if fake.lastSecretsProject != "" {
+		t.Fatal("must not call GetSecrets when --select is combined with --output dotenv")
+	}
+}
+
+func TestSecretsGetDotenvWithFilterErrorsWithoutCallingAPI(t *testing.T) {
+	fake := &fakeAPI{}
+	cmd := NewRootCommand(Dependencies{API: fake, Out: new(bytes.Buffer), Err: new(bytes.Buffer)})
+	cmd.SetArgs([]string{"project", "demo", "secrets", "get", "--output", "dotenv", "--filter", "key=API_KEY"})
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("expected error combining --filter with --output dotenv")
+	}
+	if fake.lastSecretsProject != "" {
+		t.Fatal("must not call GetSecrets when --filter is combined with --output dotenv")
+	}
+}
+
 func TestSecretsGenericErrorPropagatesWithoutStdout(t *testing.T) {
 	fake := &fakeAPI{secretsErr: errors.New("boom")}
 	out, errOut := new(bytes.Buffer), new(bytes.Buffer)
