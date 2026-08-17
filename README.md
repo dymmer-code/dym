@@ -132,11 +132,11 @@ By default `dym` looks for the extensions file at your OS's standard config dire
 
 Override order (highest priority first):
 
-1. `--extensions-file <path>` flag, on `dym ext` and any of its subcommands
+1. `--extensions-file <path>` (or `-e <path>`) flag, anywhere after `dym ext` on the command line
 2. `DYM_EXTENSIONS_FILE` environment variable
 3. the default location above
 
-If no extensions file exists, `dym ext list` says so and every other `dym ext <name>` invocation behaves like any other unknown command — nothing breaks, and every other `dym` command is unaffected. If the file exists but is malformed or an individual extension fails validation, that extension (or, for unparseable YAML, the whole file) is skipped; other, valid extensions in the same file still load and work, and `dym ext list` reports what failed.
+If no extensions file exists, `dym ext list` says so and every other `dym ext <name>` invocation behaves like any other unknown command — nothing breaks, and every other `dym` command is unaffected (in particular, `dym ext` never reads this file at all until you actually run `dym ext ...`). If the file exists but fails to parse as YAML (or uses an unrecognized key — the schema is validated strictly), `dym ext` reports that error clearly instead of silently doing nothing. If an individual extension within an otherwise-valid file fails its own validation (bad `method`, missing `url`, etc.), only that extension is skipped: the rest of the file's extensions still load and work, `dym ext list` reports how many were skipped and why, and asking for a skipped extension by name (`dym ext <name>`) names the specific reason rather than looking like a typo.
 
 ### Schema
 

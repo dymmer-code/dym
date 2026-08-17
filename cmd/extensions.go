@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -13,7 +14,9 @@ import (
 )
 
 // rawExtensionsFile is the shape of a user-authored extensions.yaml, decoded
-// verbatim before per-extension validation/normalization.
+// verbatim before per-extension validation/normalization. Decoding uses
+// strict (KnownFields) mode, so a misspelled key (e.g. "responsepath" for
+// "response_path") is a load-time error rather than a silently-dropped typo.
 type rawExtensionsFile struct {
 	Extensions map[string]rawExtension `yaml:"extensions"`
 }
@@ -35,7 +38,13 @@ type rawExtension struct {
 // extension is a validated, normalized extension definition: method and auth
 // are uppercased/lowercased respectively, and every Go template field has
 // already been parsed (so a syntax error surfaces at load time, not on first
-// use).
+// use). The url/token/request_template templates are parsed with
+// "missingkey=error" so a typo'd {{.Args.foo}} fails loudly at render time
+// instead of silently rendering the literal string "<no value>" and sending
+// a bogus request. response_template is parsed with the default (lenient)
+// behavior instead, since it executes against arbitrary decoded JSON where a
+// field being absent on a given response is often legitimate (e.g. an
+// {{if .foo}} guard).
 type extension struct {
 	Name             string
 	Description      string
@@ -59,6 +68,13 @@ type requestContext struct {
 	Args        map[string]string
 }
 
+// skippedExtension records why one extension in an otherwise-loadable file
+// failed validation and was excluded.
+type skippedExtension struct {
+	Name   string
+	Reason string
+}
+
 // extensionsLoad is the result of loading and validating an extensions.yaml
 // file. A missing file and a broken file are distinguished (Missing is not
 // an error condition; FileErr is), and a broken individual extension does
@@ -69,17 +85,29 @@ type extensionsLoad struct {
 	Missing    bool
 	FileErr    error
 	Extensions map[string]*extension
-	Skipped    []string // "name: reason", sorted, for extensions that failed validation
+	Skipped    []skippedExtension // sorted by Name
+}
+
+// skippedReason reports why name was skipped, if it was.
+func (l extensionsLoad) skippedReason(name string) (string, bool) {
+	for _, s := range l.Skipped {
+		if s.Name == name {
+			return s.Reason, true
+		}
+	}
+	return "", false
 }
 
 // loadExtensionsFile reads and validates the extensions file at path. A
 // nonexistent file is reported via Missing, not FileErr — "no extensions
 // configured yet" is a normal, expected state, not an error. A file that
-// exists but fails to parse as YAML is reported via FileErr with zero
-// extensions loaded. Once the file itself parses, each extension is
-// validated independently: a validation failure on one extension is
-// recorded in Skipped and that extension is excluded, but does not stop the
-// rest of the file from loading.
+// exists but fails to parse as YAML (including an unrecognized key, since
+// decoding is strict) is reported via FileErr with zero extensions loaded.
+// An existing-but-empty file is treated the same as a missing one (zero
+// extensions, no error) rather than an EOF decode error. Once the file
+// itself parses, each extension is validated independently: a validation
+// failure on one extension is recorded in Skipped and that extension is
+// excluded, but does not stop the rest of the file from loading.
 func loadExtensionsFile(path string) extensionsLoad {
 	result := extensionsLoad{Path: path, Extensions: map[string]*extension{}}
 	data, err := os.ReadFile(path)
@@ -91,26 +119,48 @@ func loadExtensionsFile(path string) extensionsLoad {
 		result.FileErr = fmt.Errorf("reading extensions file %s: %w", path, err)
 		return result
 	}
+	if len(bytes.TrimSpace(data)) == 0 {
+		return result
+	}
 	var raw rawExtensionsFile
-	if err := yaml.Unmarshal(data, &raw); err != nil {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(&raw); err != nil {
 		result.FileErr = fmt.Errorf("parsing extensions file %s: %w", path, err)
 		return result
 	}
 	for name, def := range raw.Extensions {
 		ext, err := buildExtension(name, def)
 		if err != nil {
-			result.Skipped = append(result.Skipped, fmt.Sprintf("%s: %v", name, err))
+			result.Skipped = append(result.Skipped, skippedExtension{Name: name, Reason: err.Error()})
 			continue
 		}
 		result.Extensions[name] = ext
 	}
-	sort.Strings(result.Skipped)
+	sort.Slice(result.Skipped, func(i, j int) bool { return result.Skipped[i].Name < result.Skipped[j].Name })
 	return result
+}
+
+// reservedExtensionNames are subcommand names dym ext always registers
+// itself (or that cobra registers automatically), so a same-named extension
+// would be permanently unreachable — dym ext <name> would resolve to the
+// builtin, never the extension.
+var reservedExtensionNames = map[string]bool{
+	"list":       true,
+	"help":       true,
+	"completion": true,
 }
 
 // buildExtension validates and normalizes a single raw extension definition,
 // parsing every template field so a syntax error is caught at load time.
 func buildExtension(name string, raw rawExtension) (*extension, error) {
+	if reservedExtensionNames[name] {
+		return nil, fmt.Errorf("extension name %q is reserved (shadowed by a built-in dym ext subcommand) and would never be reachable", name)
+	}
+	if strings.ContainsAny(name, " \t\n\r\v\f") {
+		return nil, fmt.Errorf("extension name %q contains whitespace, which cobra cannot route as a single subcommand", name)
+	}
+
 	if strings.TrimSpace(raw.URL) == "" {
 		return nil, fmt.Errorf("url is required")
 	}
@@ -147,7 +197,15 @@ func buildExtension(name string, raw rawExtension) (*extension, error) {
 		return nil, fmt.Errorf("request_template is only valid when method is not GET")
 	}
 
-	urlTmpl, err := template.New(name + ":url").Parse(raw.URL)
+	// url/token/request_template use missingkey=error: Args is a
+	// map[string]string, and text/template's default "missingkey=default"
+	// behavior silently renders an unset key as the literal string
+	// "<no value>" instead of failing — which would send a bogus request
+	// (e.g. to a URL literally containing "<no value>") on exit 0 for a
+	// simple typo like {{.Args.domian}}. A typo'd struct field like
+	// {{.Nope}} already errors on its own; this closes the same hole for
+	// map lookups.
+	urlTmpl, err := template.New(name + ":url").Option("missingkey=error").Parse(raw.URL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid url template: %w", err)
 	}
@@ -158,7 +216,7 @@ func buildExtension(name string, raw rawExtension) (*extension, error) {
 		if token == "" {
 			token = "{{.DymmerToken}}"
 		}
-		tokenTmpl, err = template.New(name + ":token").Parse(token)
+		tokenTmpl, err = template.New(name + ":token").Option("missingkey=error").Parse(token)
 		if err != nil {
 			return nil, fmt.Errorf("invalid token template: %w", err)
 		}
@@ -166,7 +224,7 @@ func buildExtension(name string, raw rawExtension) (*extension, error) {
 
 	var requestTmpl *template.Template
 	if raw.RequestTemplate != "" {
-		requestTmpl, err = template.New(name + ":request").Parse(raw.RequestTemplate)
+		requestTmpl, err = template.New(name + ":request").Option("missingkey=error").Parse(raw.RequestTemplate)
 		if err != nil {
 			return nil, fmt.Errorf("invalid request_template: %w", err)
 		}
@@ -226,36 +284,21 @@ func defaultFieldsFromRows(rows []map[string]any) []string {
 	return fields
 }
 
-// scanArgsForExtensionsFile looks for a "--extensions-file <path>" or
-// "--extensions-file=<path>" pair in args, returning the value and true if
-// found. This is used instead of ordinary cobra flag parsing because the
-// extensions file must be loaded (to know which extension subcommands and
-// flags to register) before the command tree — and therefore before cobra's
-// own flag parsing — exists at all.
-func scanArgsForExtensionsFile(args []string) (string, bool) {
-	const flag = "--extensions-file"
-	for i, a := range args {
-		if a == flag && i+1 < len(args) {
-			return args[i+1], true
-		}
-		if v, ok := strings.CutPrefix(a, flag+"="); ok {
-			return v, true
-		}
-	}
-	return "", false
-}
-
 // resolveExtensionsFilePath resolves the extensions.yaml path to use, in
-// order: deps.ExtensionsFile (test-only override, used directly with no
-// further fallback) > the "--extensions-file" flag on the real process
-// arguments > the DYM_EXTENSIONS_FILE environment variable (via deps.Env) >
-// the default location, os.UserConfigDir()/dym/extensions.yaml.
-func resolveExtensionsFilePath(deps Dependencies) string {
+// order: deps.ExtensionsFile (test-only override — set directly by tests,
+// bypassing flag/env/default resolution entirely, and taking priority even
+// over an explicit --extensions-file so tests never depend on real argv or
+// environment state) > flagValue (the --extensions-file/-e flag, already
+// extracted from the real command args by the caller — see
+// splitExtensionsFileFlag in ext.go) > the DYM_EXTENSIONS_FILE environment
+// variable (via deps.Env) > the default location,
+// os.UserConfigDir()/dym/extensions.yaml.
+func resolveExtensionsFilePath(deps Dependencies, flagValue string) string {
 	if deps.ExtensionsFile != "" {
 		return deps.ExtensionsFile
 	}
-	if v, ok := scanArgsForExtensionsFile(os.Args[1:]); ok && v != "" {
-		return v
+	if flagValue != "" {
+		return flagValue
 	}
 	if deps.Env != nil {
 		if v := deps.Env("DYM_EXTENSIONS_FILE"); v != "" {
