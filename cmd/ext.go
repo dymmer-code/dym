@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -31,6 +32,21 @@ const maxExtensionResponseBytes = 512 * 1024
 // leaks the real token into an error message.
 const redactedTokenPlaceholder = "<redacted>"
 
+// extShort/extLong describe "dym ext" for --help, including the
+// --extensions-file/-e flag that DisableFlagParsing (see newExtCommand,
+// below) keeps out of cobra's auto-generated Flags section entirely — it's
+// mentioned here in prose instead, and applied to both the outer "ext"
+// command AND the nested subtree built at run time (see newExtSubtree),
+// since "dym ext --help"/"dym ext -h" (having no subcommand of their own to
+// disambiguate) end up forwarded into and handled entirely by the nested
+// subtree, never the outer command's own (never-invoked-for-this-path) help
+// machinery.
+const extShort = "Run user-defined HTTP extensions (see extensions.yaml)"
+
+var extLong = "Run user-defined HTTP extensions declared in an extensions.yaml file.\n\n" +
+	"Use --extensions-file (-e) to point at a specific file for this invocation; " +
+	"otherwise DYM_EXTENSIONS_FILE, then the OS default config location, is used."
+
 // newExtCommand builds the "dym ext" parent command: a user-defined escape
 // hatch for arbitrary HTTP calls declared in an extensions.yaml file (see
 // cmd/extensions.go for the schema and loading/validation).
@@ -51,11 +67,9 @@ const redactedTokenPlaceholder = "<redacted>"
 // file does or doesn't exist on the machine running them.
 func newExtCommand(deps Dependencies) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "ext",
-		Short: "Run user-defined HTTP extensions (see extensions.yaml)",
-		Long: "Run user-defined HTTP extensions declared in an extensions.yaml file.\n\n" +
-			"Use --extensions-file (-e) to point at a specific file for this invocation; " +
-			"otherwise DYM_EXTENSIONS_FILE, then the OS default config location, is used.",
+		Use:                "ext",
+		Short:              extShort,
+		Long:               extLong,
 		DisableFlagParsing: true,
 		Args:               cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -129,10 +143,11 @@ func splitExtensionsFileFlag(args []string) (value string, remaining []string) {
 				i++
 				continue
 			}
-			// No value follows; leave the bare flag in place so the nested
-			// tree's own (real) flag parser produces its usual
-			// "flag needs an argument" error instead of us silently
-			// swallowing it.
+			// No value follows; leave the bare flag in place rather than
+			// silently swallowing it. The nested tree doesn't register
+			// --extensions-file itself, so this surfaces as its normal
+			// "unknown flag: --extensions-file" error, not a "flag needs an
+			// argument" one — still a clear, non-silent failure either way.
 			remaining = append(remaining, a)
 		case strings.HasPrefix(a, long+"="):
 			value = strings.TrimPrefix(a, long+"=")
@@ -153,6 +168,8 @@ func splitExtensionsFileFlag(args []string) (value string, remaining []string) {
 func newExtSubtree(deps Dependencies, path string, load extensionsLoad) *cobra.Command {
 	root := &cobra.Command{
 		Use:               "ext-resources",
+		Short:             extShort,
+		Long:              extLong,
 		Annotations:       map[string]string{cobra.CommandDisplayNameAnnotation: "dym ext"},
 		CompletionOptions: cobra.CompletionOptions{DisableDefaultCmd: true},
 		SilenceUsage:      true,
@@ -218,7 +235,13 @@ func newExtListCommand(path string, load extensionsLoad) *cobra.Command {
 // newExtensionCommand builds the generated subcommand for a single validated
 // extension. When the extension has a response_template, --filter/--select/
 // --output are not registered at all: the template fully owns the output
-// shape, so there is nothing for those flags to act on.
+// shape, so there is nothing for those flags to act on. response_template
+// renders against a responseTemplateContext{Args, Body} — Body is the
+// decoded JSON response (what it used to render directly against), and Args
+// is the same {paramName: value} map the request-side templates see, so a
+// response_template can combine response data with request-time params the
+// server never echoes back (e.g. a domain name that only ever appears in
+// the URL).
 func newExtensionCommand(deps Dependencies, ext *extension) *cobra.Command {
 	use := ext.Name
 	for _, p := range ext.Params {
@@ -266,7 +289,8 @@ func newExtensionCommand(deps Dependencies, ext *extension) *cobra.Command {
 			}
 
 			if hasTemplate {
-				rendered, err := renderTemplate(ext.ResponseTemplate, decoded)
+				tmplCtx := responseTemplateContext{Args: buildArgsMap(ext, args), Body: decoded}
+				rendered, err := renderTemplate(ext.ResponseTemplate, tmplCtx)
 				if err != nil {
 					return fmt.Errorf("extension %q: rendering response_template: %w", ext.Name, err)
 				}
@@ -287,19 +311,45 @@ func newExtensionCommand(deps Dependencies, ext *extension) *cobra.Command {
 
 // sanitizeExtensionError returns a plain error whose message is err's
 // message with every occurrence of realURL replaced by redactedURL. This is
-// used instead of "%w"-wrapping err directly: a *url.Error (returned by
-// http.NewRequest/http.Client.Do on a malformed URL or failed request)
-// embeds the exact URL it was given inside its own Error() string, so even
-// an outer message that only mentions the redacted URL would still leak the
-// real (possibly token-bearing) one the moment err gets wrapped with %w and
-// printed/unwrapped. Returning a fresh error discards that embedded field
-// entirely rather than trying to keep it reachable-but-safe.
+// a fallback for error shapes that don't independently re-serialize the URL
+// (see safeRequestError below for the *url.Error case, which needs more
+// than a string replace): returning a fresh error discards err's own
+// structure entirely rather than trying to keep it reachable-but-safe.
 func sanitizeExtensionError(err error, realURL, redactedURL string) error {
 	msg := err.Error()
 	if realURL != "" && realURL != redactedURL {
 		msg = strings.ReplaceAll(msg, realURL, redactedURL)
 	}
 	return errors.New(msg)
+}
+
+// safeRequestError returns the error to %w-wrap as the cause of any message
+// describing an extension's outbound HTTP failure (building the request,
+// performing it, or reading its response), guaranteeing the real (possibly
+// token-bearing) URL never surfaces.
+//
+// http.NewRequest (via url.Parse) and http.Client.Do both return a
+// *url.Error on failure, which embeds the exact URL it was given inside its
+// own .URL field and re-serializes it independently inside Error() — via
+// (*url.URL).String()'s own percent-encoding pass, which does not
+// necessarily match the raw urlStr string this package renders. A token
+// containing a character Go's URL encoding escapes (a space, "|", etc.)
+// therefore survives a plain sanitizeExtensionError string-replace: the
+// escaped form ("%20", "%7C", ...) inside the *url.Error's message doesn't
+// match the unescaped realURL being replaced against, so the trivially
+// percent-decodable token leaks straight through. For a *url.Error, the fix
+// is structural, not textual: drop the *url.Error wrapper (and its .URL
+// field) entirely and keep only its wrapped .Err, which describes the
+// actual failure (connection refused, DNS lookup failed, etc.) with no URL
+// embedded at all. Any other error shape falls back to the textual
+// sanitizeExtensionError approach, which is sufficient there since nothing
+// else in this call chain independently re-encodes the URL.
+func safeRequestError(err error, realURL, redactedURL string) error {
+	var uerr *url.Error
+	if errors.As(err, &uerr) {
+		return uerr.Err
+	}
+	return sanitizeExtensionError(err, realURL, redactedURL)
 }
 
 // doExtensionRequest renders ext's url (and token, if auth is bearer) and
@@ -313,14 +363,11 @@ func sanitizeExtensionError(err error, realURL, redactedURL string) error {
 // command's wrapAuthError adds. Every error message that could otherwise
 // reference the rendered url (which may itself embed the real bearer token,
 // e.g. a query-param-authenticated endpoint) uses a redacted stand-in
-// instead — see sanitizeExtensionError.
+// instead — see safeRequestError.
 func doExtensionRequest(ctx context.Context, deps Dependencies, ext *extension, args []string) ([]byte, error) {
-	reqCtx := requestContext{BaseURL: deps.BaseURL, Args: map[string]string{}}
+	reqCtx := requestContext{BaseURL: deps.BaseURL, Args: buildArgsMap(ext, args)}
 	if reqCtx.BaseURL == "" {
 		reqCtx.BaseURL = defaultBaseURL
-	}
-	for i, p := range ext.Params {
-		reqCtx.Args[p] = args[i]
 	}
 	if ext.Auth == "bearer" {
 		token, _, err := credentials.Resolve(deps.Env, deps.Store)
@@ -365,7 +412,7 @@ func doExtensionRequest(ctx context.Context, deps Dependencies, ext *extension, 
 	}
 	httpReq, err := http.NewRequestWithContext(ctx, ext.Method, urlStr, bodyReader)
 	if err != nil {
-		return nil, fmt.Errorf("extension %q: building request to %s: %w", ext.Name, redactedURL, sanitizeExtensionError(err, urlStr, redactedURL))
+		return nil, fmt.Errorf("extension %q: building request to %s: %w", ext.Name, redactedURL, safeRequestError(err, urlStr, redactedURL))
 	}
 	if len(body) > 0 {
 		httpReq.Header.Set("Content-Type", "application/json")
@@ -381,7 +428,7 @@ func doExtensionRequest(ctx context.Context, deps Dependencies, ext *extension, 
 	httpClient := &http.Client{Timeout: 30 * time.Second}
 	resp, err := httpClient.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("extension %q: request to %s failed: %w", ext.Name, redactedURL, sanitizeExtensionError(err, urlStr, redactedURL))
+		return nil, fmt.Errorf("extension %q: request to %s failed: %w", ext.Name, redactedURL, safeRequestError(err, urlStr, redactedURL))
 	}
 	defer resp.Body.Close()
 
@@ -390,7 +437,7 @@ func doExtensionRequest(ctx context.Context, deps Dependencies, ext *extension, 
 	// user-authored and can point anywhere.
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxExtensionResponseBytes+1))
 	if err != nil {
-		return nil, fmt.Errorf("extension %q: reading response from %s: %w", ext.Name, redactedURL, sanitizeExtensionError(err, urlStr, redactedURL))
+		return nil, fmt.Errorf("extension %q: reading response from %s: %w", ext.Name, redactedURL, safeRequestError(err, urlStr, redactedURL))
 	}
 	truncated := len(respBody) > maxExtensionResponseBytes
 	if truncated {

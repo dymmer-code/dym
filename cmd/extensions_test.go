@@ -450,6 +450,46 @@ extensions:
 	}
 }
 
+// Item 4 (fix round 1): --filter/--select must be validated before the HTTP
+// call fires, not after — otherwise a typo'd --filter on a POST extension
+// would let the (possibly mutating) request through before the user ever
+// finds out about the typo. Uses a hit counter on the test server, which a
+// pre-request-fired regression would increment.
+func TestExtMalformedFilterIsRejectedBeforeThePOSTFires(t *testing.T) {
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits++
+		_, _ = w.Write([]byte(`{"records":[{"id":"1"}]}`))
+	}))
+	defer srv.Close()
+
+	path := writeExtensionsYAML(t, `
+extensions:
+  create-dkim-txt:
+    url: "{{.BaseURL}}/api/v1/zones/{{.Args.domain}}/records"
+    method: POST
+    auth: none
+    params: [domain, value]
+    request_template: |
+      {"record":{"host":"mail._domainkey","type":"TXT","content_value":"{{.Args.value}}"}}
+    response_path: records
+`)
+
+	out := new(bytes.Buffer)
+	cmd := NewRootCommand(Dependencies{Out: out, Err: new(bytes.Buffer), BaseURL: srv.URL, ExtensionsFile: path})
+	cmd.SetArgs([]string{"ext", "create-dkim-txt", "example.com", "sometoken", "--filter", "nonsense-no-equals-sign"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected an error for a malformed --filter")
+	}
+	if !strings.Contains(err.Error(), "invalid --filter") {
+		t.Fatalf("expected a malformed-filter error, got %v", err)
+	}
+	if hits != 0 {
+		t.Fatalf("expected the POST to never fire, but the server was hit %d time(s)", hits)
+	}
+}
+
 func TestExtRequestTemplateInvalidJSONErrorsClearly(t *testing.T) {
 	path := writeExtensionsYAML(t, `
 extensions:
@@ -484,7 +524,7 @@ extensions:
     url: "{{.BaseURL}}/internal/v1/mail_servers/domains"
     auth: none
     response_template: |-
-      {{range .domains}}{{.}}
+      {{range .Body.domains}}{{.}}
       {{end}}
 `)
 
@@ -505,6 +545,41 @@ extensions:
 	cmd2.SetArgs([]string{"ext", "mail-domains-pretty", "--select", "domains"})
 	if err := cmd2.Execute(); err == nil || !strings.Contains(err.Error(), "unknown flag") {
 		t.Fatalf("expected an unknown flag error for --select, got %v", err)
+	}
+}
+
+// response_template must be able to combine data that only exists in the
+// response body (Body) with data that only exists in the request (Args) —
+// e.g. a domain name declared as a param and interpolated into the URL, but
+// never echoed back by the server in the response body itself. This mirrors
+// the CLI owner's concrete mailbox-passwd-lines use case.
+func TestExtResponseTemplateCombinesArgsAndBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// Deliberately has no "domain" field anywhere: the server never
+		// echoes back a value that was only ever in the URL/params.
+		_, _ = w.Write([]byte(`{"mailboxes":[{"username":"alice","enabled":true,"password_md5":"abc123"},{"username":"bob","enabled":false,"password_md5":"def456"}]}`))
+	}))
+	defer srv.Close()
+
+	path := writeExtensionsYAML(t, `
+extensions:
+  mailbox-passwd-lines:
+    url: "{{.BaseURL}}/api/v1/zones/{{.Args.domain}}/mailboxes"
+    auth: none
+    params: [domain]
+    response_template: |-
+      {{$domain := .Args.domain}}{{range .Body.mailboxes}}{{if .enabled}}{{.username}}@{{$domain}}:{{.password_md5}}{{"\n"}}{{end}}{{end}}
+`)
+
+	out := new(bytes.Buffer)
+	cmd := NewRootCommand(Dependencies{Out: out, Err: new(bytes.Buffer), BaseURL: srv.URL, ExtensionsFile: path})
+	cmd.SetArgs([]string{"ext", "mailbox-passwd-lines", "example.com"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	want := "alice@example.com:abc123\n"
+	if out.String() != want {
+		t.Fatalf("got %q, want %q", out.String(), want)
 	}
 }
 
@@ -675,34 +750,20 @@ extensions:
 	}
 }
 
-func TestExtLargeErrorResponseSnippetStaysCapped(t *testing.T) {
-	huge := bytes.Repeat([]byte("b"), 8*1024*1024) // 8 MiB, matching the reviewer's repro
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusServiceUnavailable)
-		_, _ = w.Write(huge)
-	}))
-	defer srv.Close()
-
-	path := writeExtensionsYAML(t, `
-extensions:
-  big:
-    url: "{{.BaseURL}}/big"
-    auth: none
-`)
-	cmd := NewRootCommand(Dependencies{Out: new(bytes.Buffer), Err: new(bytes.Buffer), BaseURL: srv.URL, ExtensionsFile: path})
-	cmd.SetArgs([]string{"ext", "big"})
-	err := cmd.Execute()
-	if err == nil {
-		t.Fatal("expected an error for a 503 response")
-	}
-	// The error string itself must stay small: proof the huge body wasn't
-	// dumped whole into the message (which is the only externally
-	// observable signal from a unit test that the buffering was bounded;
-	// see maxExtensionResponseBytes for the actual memory-bounding fix).
-	if len(err.Error()) > 2000 {
-		t.Fatalf("error message is %d bytes, expected a small capped snippet", len(err.Error()))
-	}
-}
+// A dedicated "large non-2xx body" test was considered and deliberately
+// dropped (fix round 2): it only asserted the final error string stayed
+// under an arbitrary byte count, which the pre-LimitReader code (that
+// buffered the whole body via io.ReadAll before truncating only the
+// *display* snippet) would have passed too — the 500-byte error snippet cap
+// already existed before this round's fix and was never the actual bug.
+// TestExtLargeSuccessResponseIsBoundedNotBuffered above is what actually
+// exercises the maxExtensionResponseBytes/LimitReader change (a 2xx body
+// just over the cap must produce the new, distinct truncation error, which
+// only exists because of this round's fix); TestExtNon2xxResponseIsClearError
+// separately covers the non-2xx error-message shape at normal size. Neither
+// test — nor any unit test — can literally prove peak memory usage stayed
+// bounded; io.LimitReader's own well-established semantics are relied on
+// for that guarantee.
 
 // Item 3: a bearer token embedded in the url template must never appear in
 // an error message — only the redacted stand-in should.
@@ -725,6 +786,49 @@ extensions:
 	}
 	if strings.Contains(err.Error(), "SUPER-SECRET-SUFFIX") {
 		t.Fatalf("token leaked into error message: %v", err)
+	}
+	if !strings.Contains(err.Error(), redactedTokenPlaceholder) {
+		t.Fatalf("expected the redacted placeholder in the error, got %v", err)
+	}
+}
+
+// Fix round 2, item A1: the plain string-replace in sanitizeExtensionError
+// is defeated when the token sits in the URL *path* and contains a
+// character Go's URL encoding percent-escapes (a space or "|", here) — a
+// *url.Error's own .Error() string embeds req.URL.String(), which
+// re-serializes (and thus re-percent-encodes) the URL independently of the
+// raw, unescaped string our template rendered, so a literal string-replace
+// against the raw string never matches the *encoded* form and the
+// (trivially percent-decodable) token survives. safeRequestError must
+// special-case *url.Error and drop its .URL field entirely rather than try
+// to sanitize its re-encoded form.
+func TestExtTokenSurvivingPercentEncodingIsStillRedacted(t *testing.T) {
+	const token = "secret token|value" // space + "|": both get percent-escaped by (*url.URL).String()
+	path := writeExtensionsYAML(t, `
+extensions:
+  leaky-path:
+    url: "http://127.0.0.1:1/creds/{{.DymmerToken}}"
+    auth: bearer
+`)
+	store := &fakeStore{token: token}
+	cmd := NewRootCommand(Dependencies{
+		Out: new(bytes.Buffer), Err: new(bytes.Buffer), ExtensionsFile: path,
+		Store: store, Env: func(string) string { return "" },
+	})
+	cmd.SetArgs([]string{"ext", "leaky-path"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected a connection error against 127.0.0.1:1")
+	}
+	if strings.Contains(err.Error(), token) {
+		t.Fatalf("token leaked (raw form) into error message: %v", err)
+	}
+	// The percent-encoded form ("%20"/"%7C" in place of the space/"|") is
+	// exactly what a plain string-replace against the raw token would miss;
+	// it must not appear either, since it round-trips right back to the
+	// real token via url.QueryUnescape.
+	if strings.Contains(err.Error(), "%20") || strings.Contains(err.Error(), "%7C") || strings.Contains(err.Error(), "%7c") {
+		t.Fatalf("token leaked (percent-encoded form) into error message: %v", err)
 	}
 	if !strings.Contains(err.Error(), redactedTokenPlaceholder) {
 		t.Fatalf("expected the redacted placeholder in the error, got %v", err)
@@ -885,18 +989,43 @@ extensions:
 	}
 }
 
-// Item 6 (hermeticity): building and running a completely unrelated command
-// must not depend on any extensions file existing (or not) on the machine
-// running the test — this is now true by construction (newExtCommand does
-// no file I/O outside its own RunE), but this guards the observable
-// behavior: a credential-free command still works with no
-// Dependencies.ExtensionsFile override at all.
+// Item 6 (hermeticity, strengthened per fix-round-2 review): building and
+// running a completely unrelated command must not depend on any extensions
+// file existing (or not) at the real, resolved default location — this is
+// true by construction (newExtCommand does no file I/O outside its own
+// RunE), and this test actually proves it rather than merely running
+// against whatever (probably absent) file happens to be at the default
+// location on the machine running the test: it plants a deliberately
+// malformed extensions.yaml at the real os.UserConfigDir()-resolved default
+// path (via t.Setenv on HOME/XDG_CONFIG_HOME, restored automatically) and
+// confirms a credential-free command is completely unaffected. Against the
+// old eager-load-at-NewRootCommand-time code, this would have failed (or at
+// least logged/surfaced the parse error somewhere), since that code read
+// this exact file during every NewRootCommand call regardless of which
+// command was about to run.
 func TestNonExtCommandDoesNotDependOnExtensionsFile(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "xdg-config"))
+	t.Setenv("AppData", filepath.Join(dir, "AppData"))
+
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		t.Fatalf("os.UserConfigDir(): %v", err)
+	}
+	extDir := filepath.Join(configDir, "dym")
+	if err := os.MkdirAll(extDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(extDir, "extensions.yaml"), []byte("extensions:\n  broken: [this is not valid yaml\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
 	out := new(bytes.Buffer)
 	cmd := NewRootCommand(Dependencies{Out: out, Err: new(bytes.Buffer)})
 	cmd.SetArgs([]string{"auth", "token-help"})
 	if err := cmd.Execute(); err != nil {
-		t.Fatal(err)
+		t.Fatalf("auth token-help must be unaffected by a broken extensions.yaml at the default path, got: %v", err)
 	}
 }
 

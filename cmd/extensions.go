@@ -68,6 +68,36 @@ type requestContext struct {
 	Args        map[string]string
 }
 
+// responseTemplateContext is the template data response_template renders
+// against. Body is what used to be rendered against directly (the raw
+// decoded JSON response), and Args carries exactly the same
+// {paramName: value} map the request-side templates see — so a
+// response_template can combine data that only exists in the response body
+// with data that only exists in the request (e.g. a domain name declared as
+// a param and interpolated into the URL, but never echoed back by the
+// server in the response body itself). A template that used to write
+// "{{range .domains}}" now writes "{{range .Body.domains}}", and can
+// additionally reference "{{.Args.domain}}".
+type responseTemplateContext struct {
+	Args map[string]string
+	Body any
+}
+
+// buildArgsMap builds the {paramName: value} map from an extension's
+// declared params and a subcommand invocation's positional args, in
+// declaration order. Shared by doExtensionRequest (which uses it to build
+// requestContext.Args for url/token/request_template) and
+// newExtensionCommand's response_template branch (which uses it to build
+// responseTemplateContext.Args) so both see identical values for the same
+// invocation.
+func buildArgsMap(ext *extension, args []string) map[string]string {
+	m := make(map[string]string, len(ext.Params))
+	for i, p := range ext.Params {
+		m[p] = args[i]
+	}
+	return m
+}
+
 // skippedExtension records why one extension in an otherwise-loadable file
 // failed validation and was excluded.
 type skippedExtension struct {
