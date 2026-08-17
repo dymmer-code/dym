@@ -56,19 +56,19 @@ func newSecretsCommand(project string, deps Dependencies) *cobra.Command {
 }
 
 func newSecretsGetCommand(project string, deps Dependencies) *cobra.Command {
-	var env, deployment, format string
+	var env, deployment, output string
 	cmd := &cobra.Command{
 		Use:   "get",
 		Short: "Fetch secrets for a project",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			var wireFormat string
-			switch format {
-			case "json":
+			switch output {
+			case "table", "json":
 				wireFormat = ""
 			case "dotenv":
 				wireFormat = ".env"
 			default:
-				return errors.New(`--format must be "json" or "dotenv"`)
+				return errors.New(`--output must be "table", "json", or "dotenv"`)
 			}
 			client, err := resolveAPI(deps)
 			if err != nil {
@@ -82,11 +82,14 @@ func newSecretsGetCommand(project string, deps Dependencies) *cobra.Command {
 				_, err := io.WriteString(cmd.OutOrStdout(), result.Raw)
 				return err
 			}
-			return json.NewEncoder(cmd.OutOrStdout()).Encode(result.Entries)
+			if output == "json" {
+				return json.NewEncoder(cmd.OutOrStdout()).Encode(result.Entries)
+			}
+			return writeSecretsTable(cmd.OutOrStdout(), result.Entries)
 		},
 	}
 	cmd.Flags().StringVar(&env, "env", "dev", "Environment to fetch secrets for")
 	cmd.Flags().StringVar(&deployment, "deployment", "", "Deployment name (omit for the default deployment)")
-	cmd.Flags().StringVar(&format, "format", "json", `Output format: "json" or "dotenv"`)
+	cmd.Flags().StringVarP(&output, "output", "o", "table", `Output format: "table", "json", or "dotenv"`)
 	return cmd
 }

@@ -15,7 +15,7 @@ func TestSecretsDotenvWritesOnlyBodyToStdout(t *testing.T) {
 	fake := &fakeAPI{secretsResult: &api.SecretsResult{Raw: "API_KEY=value\n"}}
 	out, errOut := new(bytes.Buffer), new(bytes.Buffer)
 	cmd := NewRootCommand(Dependencies{API: fake, Out: out, Err: errOut})
-	cmd.SetArgs([]string{"project", "demo", "secrets", "get", "--format", "dotenv"})
+	cmd.SetArgs([]string{"project", "demo", "secrets", "get", "--output", "dotenv"})
 	if err := cmd.Execute(); err != nil || out.String() != "API_KEY=value\n" || errOut.Len() != 0 {
 		t.Fatal(err, out.String(), errOut.String())
 	}
@@ -73,11 +73,11 @@ func TestSecretsDeploymentFlagPassesThrough(t *testing.T) {
 	}
 }
 
-func TestSecretsFormatJSONDefaultEncodesEntriesWithNewline(t *testing.T) {
+func TestSecretsOutputJSONEncodesEntriesWithNewline(t *testing.T) {
 	fake := &fakeAPI{secretsResult: &api.SecretsResult{Entries: []api.SecretEntry{{Key: "A", Value: "1"}}}}
 	out := new(bytes.Buffer)
 	cmd := NewRootCommand(Dependencies{API: fake, Out: out, Err: new(bytes.Buffer)})
-	cmd.SetArgs([]string{"project", "demo", "secrets", "get"})
+	cmd.SetArgs([]string{"project", "demo", "secrets", "get", "--output", "json"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
@@ -96,10 +96,31 @@ func TestSecretsFormatJSONDefaultEncodesEntriesWithNewline(t *testing.T) {
 	}
 }
 
-func TestSecretsFormatDotenvTranslatesWireValue(t *testing.T) {
+func TestSecretsDefaultOutputIsTableOfJSONModeEntries(t *testing.T) {
+	fake := &fakeAPI{secretsResult: &api.SecretsResult{Entries: []api.SecretEntry{{Key: "A", Value: "1"}}}}
+	out := new(bytes.Buffer)
+	cmd := NewRootCommand(Dependencies{API: fake, Out: out, Err: new(bytes.Buffer)})
+	cmd.SetArgs([]string{"project", "demo", "secrets", "get"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	// Table default still fetches JSON-mode entries from GetSecrets (wire
+	// value "").
+	if fake.lastSecretsFormat != "" {
+		t.Fatalf("wire format = %q, want empty string for table (JSON-mode entries)", fake.lastSecretsFormat)
+	}
+	if strings.HasPrefix(strings.TrimSpace(out.String()), "[") {
+		t.Fatalf("expected table output by default, got JSON-looking output: %q", out.String())
+	}
+	if !strings.Contains(out.String(), "KEY") || !strings.Contains(out.String(), "VALUE") || !strings.Contains(out.String(), "A") {
+		t.Fatalf("table output missing expected content: %q", out.String())
+	}
+}
+
+func TestSecretsOutputDotenvTranslatesWireValue(t *testing.T) {
 	fake := &fakeAPI{secretsResult: &api.SecretsResult{Raw: "A=1\n"}}
 	cmd := NewRootCommand(Dependencies{API: fake, Out: new(bytes.Buffer), Err: new(bytes.Buffer)})
-	cmd.SetArgs([]string{"project", "demo", "secrets", "get", "--format", "dotenv"})
+	cmd.SetArgs([]string{"project", "demo", "secrets", "get", "--output", "dotenv"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
@@ -108,15 +129,15 @@ func TestSecretsFormatDotenvTranslatesWireValue(t *testing.T) {
 	}
 }
 
-func TestSecretsInvalidFormatErrorsWithoutCallingAPI(t *testing.T) {
+func TestSecretsInvalidOutputErrorsWithoutCallingAPI(t *testing.T) {
 	fake := &fakeAPI{}
 	cmd := NewRootCommand(Dependencies{API: fake, Out: new(bytes.Buffer), Err: new(bytes.Buffer)})
-	cmd.SetArgs([]string{"project", "demo", "secrets", "get", "--format", "yaml"})
+	cmd.SetArgs([]string{"project", "demo", "secrets", "get", "--output", "yaml"})
 	if err := cmd.Execute(); err == nil {
-		t.Fatal("expected error for invalid --format")
+		t.Fatal("expected error for invalid --output")
 	}
 	if fake.lastSecretsProject != "" {
-		t.Fatal("must not call GetSecrets with an invalid --format")
+		t.Fatal("must not call GetSecrets with an invalid --output")
 	}
 }
 

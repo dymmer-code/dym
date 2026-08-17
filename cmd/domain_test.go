@@ -28,12 +28,14 @@ type fakeAPI struct {
 	mailboxesErr   error
 	forwardingsErr error
 
-	lastListDomain  string
-	lastListType    string
-	lastCreateInput api.RecordInput
-	lastUpdateID    string
-	lastUpdateInput api.RecordInput
-	deletedID       string
+	lastListDomain    string
+	lastListType      string
+	lastCreateInput   api.RecordInput
+	lastUpdateID      string
+	lastUpdateInput   api.RecordInput
+	deletedID         string
+	mailboxesCalled   bool
+	forwardingsCalled bool
 
 	secretsResult *api.SecretsResult
 	secretsErr    error
@@ -88,6 +90,7 @@ func (f *fakeAPI) DeleteRecord(_ context.Context, _ string, id string) (*api.Rec
 }
 
 func (f *fakeAPI) ListMailboxes(_ context.Context, _ string) ([]api.Mailbox, error) {
+	f.mailboxesCalled = true
 	if f.mailboxesErr != nil {
 		return nil, f.mailboxesErr
 	}
@@ -95,6 +98,7 @@ func (f *fakeAPI) ListMailboxes(_ context.Context, _ string) ([]api.Mailbox, err
 }
 
 func (f *fakeAPI) ListForwardings(_ context.Context, _ string) ([]api.Forwarding, error) {
+	f.forwardingsCalled = true
 	if f.forwardingsErr != nil {
 		return nil, f.forwardingsErr
 	}
@@ -136,7 +140,7 @@ func TestRecordDeleteConfirmedCallsAPIAndPrintsJSON(t *testing.T) {
 		Out: out, Err: errOut, API: fake, IsTerminal: terminalTrue,
 		Confirm: func(prompt string) (bool, error) { promptSeen = prompt; return true, nil },
 	})
-	cmd.SetArgs([]string{"domain", "example.com", "records", "delete", "record-1"})
+	cmd.SetArgs([]string{"domain", "example.com", "records", "delete", "record-1", "--output", "json"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
@@ -203,7 +207,7 @@ func TestRecordDeletePromptGoesToStderrNotStdout(t *testing.T) {
 			return true, nil
 		},
 	})
-	cmd.SetArgs([]string{"domain", "example.com", "records", "delete", "record-1"})
+	cmd.SetArgs([]string{"domain", "example.com", "records", "delete", "record-1", "--output", "json"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +227,7 @@ func TestRecordsListPassesTypeFilterAndEncodesJSON(t *testing.T) {
 	fake := &fakeAPI{records: []api.Record{{ID: "r1", Type: "A", Host: "www", Content: map[string]string{"ip": "203.0.113.10"}}}}
 	out := new(bytes.Buffer)
 	cmd := NewRootCommand(Dependencies{Out: out, Err: new(bytes.Buffer), API: fake})
-	cmd.SetArgs([]string{"domain", "example.com", "records", "list", "--type", "A"})
+	cmd.SetArgs([]string{"domain", "example.com", "records", "list", "--type", "A", "--output", "json"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
@@ -257,7 +261,7 @@ func TestRecordsCreateMapsFlagsToInput(t *testing.T) {
 	cmd := NewRootCommand(Dependencies{Out: out, Err: new(bytes.Buffer), API: fake})
 	cmd.SetArgs([]string{
 		"domain", "example.com", "records", "create",
-		"--type", "A", "--name", "www", "--ttl", "300", "--ip", "203.0.113.10",
+		"--type", "A", "--name", "www", "--ttl", "300", "--ip", "203.0.113.10", "--output", "json",
 	})
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
@@ -331,7 +335,7 @@ func TestRecordsUpdateCallsAPIWithIDAndPrintsJSON(t *testing.T) {
 	fake := &fakeAPI{}
 	out := new(bytes.Buffer)
 	cmd := NewRootCommand(Dependencies{Out: out, Err: new(bytes.Buffer), API: fake})
-	cmd.SetArgs([]string{"domain", "example.com", "records", "update", "record-1", "--type", "A", "--ip", "9.9.9.9"})
+	cmd.SetArgs([]string{"domain", "example.com", "records", "update", "record-1", "--type", "A", "--ip", "9.9.9.9", "--output", "json"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
@@ -351,7 +355,7 @@ func TestMailboxesListPrintsJSON(t *testing.T) {
 	fake := &fakeAPI{mailboxes: []api.Mailbox{{Username: "alice", Enabled: true}}}
 	out := new(bytes.Buffer)
 	cmd := NewRootCommand(Dependencies{Out: out, Err: new(bytes.Buffer), API: fake})
-	cmd.SetArgs([]string{"domain", "example.com", "mailboxes", "list"})
+	cmd.SetArgs([]string{"domain", "example.com", "mailboxes", "list", "--output", "json"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
@@ -368,7 +372,7 @@ func TestForwardingsListPrintsJSON(t *testing.T) {
 	fake := &fakeAPI{forwardings: []api.Forwarding{{Username: "alice", Destination: []string{"bob@example.org"}, Enabled: true}}}
 	out := new(bytes.Buffer)
 	cmd := NewRootCommand(Dependencies{Out: out, Err: new(bytes.Buffer), API: fake})
-	cmd.SetArgs([]string{"domain", "example.com", "forwardings", "list"})
+	cmd.SetArgs([]string{"domain", "example.com", "forwardings", "list", "--output", "json"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
@@ -378,6 +382,149 @@ func TestForwardingsListPrintsJSON(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].Username != "alice" {
 		t.Fatalf("decoded forwardings = %+v", got)
+	}
+}
+
+func TestRecordsListDefaultsToTable(t *testing.T) {
+	fake := &fakeAPI{records: []api.Record{{ID: "r1", Type: "A", Host: "www", TimeToLive: 300, Content: map[string]string{"ip": "203.0.113.10"}}}}
+	out := new(bytes.Buffer)
+	cmd := NewRootCommand(Dependencies{Out: out, Err: new(bytes.Buffer), API: fake})
+	cmd.SetArgs([]string{"domain", "example.com", "records", "list"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if strings.HasPrefix(strings.TrimSpace(out.String()), "[") {
+		t.Fatalf("expected table output by default, got JSON-looking output: %q", out.String())
+	}
+	if !strings.Contains(out.String(), "ID") || !strings.Contains(out.String(), "r1") {
+		t.Fatalf("table output missing expected content: %q", out.String())
+	}
+}
+
+func TestMailboxesListDefaultsToTable(t *testing.T) {
+	fake := &fakeAPI{mailboxes: []api.Mailbox{{Username: "alice", Enabled: true}}}
+	out := new(bytes.Buffer)
+	cmd := NewRootCommand(Dependencies{Out: out, Err: new(bytes.Buffer), API: fake})
+	cmd.SetArgs([]string{"domain", "example.com", "mailboxes", "list"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if strings.HasPrefix(strings.TrimSpace(out.String()), "[") {
+		t.Fatalf("expected table output by default, got JSON-looking output: %q", out.String())
+	}
+	if !strings.Contains(out.String(), "USERNAME") || !strings.Contains(out.String(), "alice") {
+		t.Fatalf("table output missing expected content: %q", out.String())
+	}
+}
+
+func TestForwardingsListDefaultsToTable(t *testing.T) {
+	fake := &fakeAPI{forwardings: []api.Forwarding{{Username: "alice", Destination: []string{"bob@example.org"}, Enabled: true}}}
+	out := new(bytes.Buffer)
+	cmd := NewRootCommand(Dependencies{Out: out, Err: new(bytes.Buffer), API: fake})
+	cmd.SetArgs([]string{"domain", "example.com", "forwardings", "list"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if strings.HasPrefix(strings.TrimSpace(out.String()), "[") {
+		t.Fatalf("expected table output by default, got JSON-looking output: %q", out.String())
+	}
+	if !strings.Contains(out.String(), "USERNAME") || !strings.Contains(out.String(), "alice") {
+		t.Fatalf("table output missing expected content: %q", out.String())
+	}
+}
+
+func TestRecordsCreateDefaultsToTable(t *testing.T) {
+	fake := &fakeAPI{createResult: &api.Record{ID: "new-record", Type: "A", Host: "www"}}
+	out := new(bytes.Buffer)
+	cmd := NewRootCommand(Dependencies{Out: out, Err: new(bytes.Buffer), API: fake})
+	cmd.SetArgs([]string{"domain", "example.com", "records", "create", "--type", "A", "--name", "www", "--ip", "1.2.3.4"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if strings.HasPrefix(strings.TrimSpace(out.String()), "{") {
+		t.Fatalf("expected table output by default, got JSON-looking output: %q", out.String())
+	}
+	if !strings.Contains(out.String(), "ID") || !strings.Contains(out.String(), "new-record") {
+		t.Fatalf("table output missing expected content: %q", out.String())
+	}
+}
+
+func TestRecordsListInvalidOutputErrorsWithoutCallingAPI(t *testing.T) {
+	fake := &fakeAPI{}
+	cmd := NewRootCommand(Dependencies{Out: new(bytes.Buffer), Err: new(bytes.Buffer), API: fake})
+	cmd.SetArgs([]string{"domain", "example.com", "records", "list", "--output", "yaml"})
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("expected error for invalid --output")
+	}
+	if fake.lastListDomain != "" {
+		t.Fatal("must not call ListRecords with an invalid --output")
+	}
+}
+
+func TestRecordsCreateInvalidOutputErrorsWithoutCallingAPI(t *testing.T) {
+	fake := &fakeAPI{}
+	cmd := NewRootCommand(Dependencies{Out: new(bytes.Buffer), Err: new(bytes.Buffer), API: fake})
+	cmd.SetArgs([]string{"domain", "example.com", "records", "create", "--type", "A", "--output", "yaml"})
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("expected error for invalid --output")
+	}
+	if fake.lastCreateInput.Type != "" {
+		t.Fatal("must not call CreateRecord with an invalid --output")
+	}
+}
+
+func TestRecordsUpdateInvalidOutputErrorsWithoutCallingAPI(t *testing.T) {
+	fake := &fakeAPI{}
+	cmd := NewRootCommand(Dependencies{Out: new(bytes.Buffer), Err: new(bytes.Buffer), API: fake})
+	cmd.SetArgs([]string{"domain", "example.com", "records", "update", "record-1", "--type", "A", "--output", "yaml"})
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("expected error for invalid --output")
+	}
+	if fake.lastUpdateID != "" {
+		t.Fatal("must not call UpdateRecord with an invalid --output")
+	}
+}
+
+func TestRecordsDeleteInvalidOutputErrorsBeforePromptOrAPI(t *testing.T) {
+	fake := &fakeAPI{}
+	confirmCalled := false
+	cmd := NewRootCommand(Dependencies{
+		Out: new(bytes.Buffer), Err: new(bytes.Buffer), API: fake, IsTerminal: terminalTrue,
+		Confirm: func(string) (bool, error) { confirmCalled = true; return true, nil },
+	})
+	cmd.SetArgs([]string{"domain", "example.com", "records", "delete", "record-1", "--output", "yaml"})
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("expected error for invalid --output")
+	}
+	if confirmCalled {
+		t.Fatal("must not prompt for confirmation with an invalid --output")
+	}
+	if fake.deletedID != "" {
+		t.Fatal("must not call DeleteRecord with an invalid --output")
+	}
+}
+
+func TestMailboxesListInvalidOutputErrorsWithoutCallingAPI(t *testing.T) {
+	fake := &fakeAPI{}
+	cmd := NewRootCommand(Dependencies{Out: new(bytes.Buffer), Err: new(bytes.Buffer), API: fake})
+	cmd.SetArgs([]string{"domain", "example.com", "mailboxes", "list", "--output", "yaml"})
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("expected error for invalid --output")
+	}
+	if fake.mailboxesCalled {
+		t.Fatal("must not call ListMailboxes with an invalid --output")
+	}
+}
+
+func TestForwardingsListInvalidOutputErrorsWithoutCallingAPI(t *testing.T) {
+	fake := &fakeAPI{}
+	cmd := NewRootCommand(Dependencies{Out: new(bytes.Buffer), Err: new(bytes.Buffer), API: fake})
+	cmd.SetArgs([]string{"domain", "example.com", "forwardings", "list", "--output", "yaml"})
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("expected error for invalid --output")
+	}
+	if fake.forwardingsCalled {
+		t.Fatal("must not call ListForwardings with an invalid --output")
 	}
 }
 

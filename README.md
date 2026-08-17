@@ -59,10 +59,10 @@ export DYMMER_TOKEN=your-token-here
 
 | Command | Description |
 | --- | --- |
-| `dym domain <domain> records list [--type <type>]` | List DNS records, optionally filtered by type |
-| `dym domain <domain> records create --type <type> [flags]` | Create a DNS record |
-| `dym domain <domain> records update <id> --type <type> [flags]` | Update a DNS record (`--type` must always be resent) |
-| `dym domain <domain> records delete <id> [--yes]` | Delete a DNS record (prompts for confirmation unless `--yes` is given or stdin isn't a terminal, in which case `--yes` is required) |
+| `dym domain <domain> records list [--type <type>] [-o table\|json]` | List DNS records, optionally filtered by type |
+| `dym domain <domain> records create --type <type> [flags] [-o table\|json]` | Create a DNS record |
+| `dym domain <domain> records update <id> --type <type> [flags] [-o table\|json]` | Update a DNS record (`--type` must always be resent) |
+| `dym domain <domain> records delete <id> [--yes] [-o table\|json]` | Delete a DNS record (prompts for confirmation unless `--yes` is given or stdin isn't a terminal, in which case `--yes` is required) |
 
 Content flags accepted by `create` and `update` (only the ones you set are sent to the server):
 
@@ -72,22 +72,22 @@ Content flags accepted by `create` and `update` (only the ones you set are sent 
 
 | Command | Description |
 | --- | --- |
-| `dym domain <domain> mailboxes list` | List mailboxes |
+| `dym domain <domain> mailboxes list [-o table\|json]` | List mailboxes |
 
 ### `dym domain <domain> forwardings`
 
 | Command | Description |
 | --- | --- |
-| `dym domain <domain> forwardings list` | List mail forwardings |
+| `dym domain <domain> forwardings list [-o table\|json]` | List mail forwardings |
 
 ### `dym project <project> secrets`
 
 | Command | Description |
 | --- | --- |
-| `dym project <project> secrets get [--env <env>] [--deployment <name>] [--format json\|dotenv]` | Fetch secrets for a project |
+| `dym project <project> secrets get [--env <env>] [--deployment <name>] [-o table\|json\|dotenv]` | Fetch secrets for a project |
 
-`--env` defaults to `dev`. `--deployment` is optional. `--format` accepts `json` (default, an array of secret entries) or `dotenv` (the raw `.env`-formatted body). Secrets are written to stdout only; errors are written to stderr only.
+`--env` defaults to `dev`. `--deployment` is optional. `--output`/`-o` accepts `table` (default, a two-column KEY/VALUE table), `json` (an array of secret entries), or `dotenv` (the raw `.env`-formatted body). Secrets are written to stdout only; errors are written to stderr only.
 
 ## Output
 
-Commands that print API results write JSON (or, for `secrets get --format dotenv`, raw dotenv text) to stdout. Errors are written to stderr, and the process exits non-zero on failure.
+Every command that prints API results defaults to a human-readable table on stdout. Pass `--output json` (`-o json`) to get JSON instead (byte-for-byte the same shape whether the result is a list or a single created/updated/deleted record); `secrets get` also accepts `--output dotenv` for the raw `.env`-formatted body. Empty lists print a `No <resource> found.` message instead of an empty table. Errors are written to stderr, and the process exits non-zero on failure.
