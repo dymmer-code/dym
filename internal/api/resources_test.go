@@ -155,7 +155,7 @@ func TestListForwardingsDestinationIsSlice(t *testing.T) {
 		if r.URL.Path != "/zones/example.com/forwardings" {
 			t.Fatal(r.URL.Path)
 		}
-		io.WriteString(w, `{"status":"ok","forwardings":[{"username":"admin","destination":["bombadil@bosqueviejo.net","other@example.com"],"enabled":true}]}`)
+		io.WriteString(w, `{"status":"ok","forwardings":[{"username":"admin","destination":["first@example.com","second@example.com"],"enabled":true}]}`)
 	}))
 	defer s.Close()
 
@@ -163,7 +163,7 @@ func TestListForwardingsDestinationIsSlice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(fwds) != 1 || len(fwds[0].Destination) != 2 || fwds[0].Destination[0] != "bombadil@bosqueviejo.net" {
+	if len(fwds) != 1 || len(fwds[0].Destination) != 2 || fwds[0].Destination[0] != "first@example.com" {
 		t.Fatalf("unexpected forwardings: %+v", fwds)
 	}
 }
