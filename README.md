@@ -93,7 +93,8 @@ Content flags accepted by `create` and `update` (only the ones you set are sent 
 | Command | Description |
 | --- | --- |
 | `dym ext list` | List extensions declared in the extensions file |
-| `dym ext <name> [params...] [--filter field=value]... [--select fields] [-o table\|json\|csv\|tsv]` | Run a user-defined extension (flags omitted when the extension sets `response_template`) |
+| `dym ext <name> [params...] [--filter field=value]... [--select fields] [-o table\|json\|csv\|tsv]` | Run a user-defined extension (tabular mode, when `response` is omitted) |
+| `dym ext <name> [params...] [--to <file>]... [--append-to <file>]...` | Run a user-defined extension with `response` templates |
 
 See [Extensions](#extensions) below for the config file and schema.
 
@@ -147,7 +148,6 @@ extensions:
     url: "{{.BaseURL}}/internal/v1/mail_servers/domains"
     method: GET                # optional, default GET
     auth: none                 # optional, default "none"; or "bearer"
-    response_path: domains     # dot path into the JSON response where the row array lives; omitted = response body itself is the array
     params: []                 # optional, default []; declared positional parameter names, in order
 
   create-dkim-txt:
@@ -157,7 +157,6 @@ extensions:
     params: [domain, value]
     request_template: |
       {"record":{"host":"mail._domainkey","type":"TXT","content_value":"{{.Args.value}}"}}
-    response_path: record
 ```
 
 Field reference (all under a top-level `extensions:` map keyed by extension name):
@@ -171,8 +170,7 @@ Field reference (all under a top-level `extensions:` map keyed by extension name
 | `token` | no | A template for the bearer token; only meaningful when `auth: bearer`, defaults to `"{{.DymmerToken}}"`; an error if set alongside `auth: none` |
 | `params` | no | Positional parameter names, in order; the generated subcommand requires exactly this many args, and its `--help` shows them, e.g. `dym ext zone-txt-records <domain>` |
 | `request_template` | no | A Go template rendered against the same data as `url`, sent as the request body; must render to valid JSON; only valid when `method` is not `GET`; when set, `Content-Type: application/json` is set automatically |
-| `response_path` | no | Dot-separated path into the decoded JSON response where the row array lives (e.g. `domains`, or nested like `data.items`); omitted means the response body itself is the array. Mutually exclusive with `response_template` |
-| `response_template` | no | A Go template rendered against `{Args, Body}` (`Body` is the decoded JSON response; `Args` is the same param map `url`/`token`/`request_template` see); its output is written to stdout verbatim (no added newline — you own your own newlines). When set, `--filter`/`--select`/`--output` are **not** registered on that subcommand: the template fully owns the output shape |
+| `response` | no | A list of template entries (`- template: ...`) rendered against `{Args, Body}` (`Body` is the decoded JSON response; `Args` is the same param map `url`/`token`/`request_template` see). When set, `--to` and `--append-to` are registered to route template outputs to files; `--filter`/`--select`/`--output` are **not** registered. When omitted, output is rendered as table/json/csv/tsv directly from the response JSON array |
 
 Inside `url`, `token`, and `request_template`, templates render against:
 
@@ -184,22 +182,22 @@ Inside `url`, `token`, and `request_template`, templates render against:
 }
 ```
 
-`response_template` instead renders against:
+`response` templates instead render against:
 
 ```go
 {
   Args map[string]string // exactly the same params map as above, e.g. {{.Args.domain}}
-  Body any                // the decoded JSON response body
+  Body any               // the decoded JSON response body
 }
 ```
 
-so `{"domains":["a.com"]}` is addressed as `{{range .Body.domains}}{{.}}\n{{end}}`, not bare `{{range .domains}}`. Splitting `Body` out from the top level like this is what lets a `response_template` combine response data with request-time params the server itself never echoes back — see the third worked example below.
+so `{"domains":["a.com"]}` is addressed as `{{range .Body.domains}}{{.}}\n{{end}}`, not bare `{{range .domains}}`. Splitting `Body` out from the top level like this is what lets a response template combine response data with request-time params the server itself never echoes back — see the worked examples below.
 
-When `response_path` is used (i.e. no `response_template`), the resolved array becomes rows for `--filter`/`--select`/`--output table|json|csv|tsv`, same as `records list`/`mailboxes list`/etc.: object elements become rows as-is; scalar elements (a plain array of strings, say) are wrapped as `{"value": <elem>}`. With no `--select`, the default columns are the sorted union of every row's keys (extensions don't have a fixed per-endpoint column set the way built-in commands do).
+When `response` is omitted, the decoded response array becomes rows for `--filter`/`--select`/`--output table|json|csv|tsv`, same as `records list`/`mailboxes list`/etc.: object elements become rows as-is; scalar elements (a plain array of strings, say) are wrapped as `{"value": <elem>}`. With no `--select`, the default columns are the sorted union of every row's keys.
 
 ### Worked examples
 
-**GET with `response_path`** — list domains from an internal, unauthenticated endpoint:
+**GET with default tabular output** — list domains from an internal, unauthenticated endpoint:
 
 ```yaml
 extensions:
@@ -207,7 +205,6 @@ extensions:
     description: "Authorized mail-server domains"
     url: "{{.BaseURL}}/internal/v1/mail_servers/domains"
     auth: none
-    response_path: domains
 ```
 
 ```sh
@@ -234,7 +231,7 @@ extensions:
 dym ext create-dkim-txt example.com "v=DKIM1; k=rsa; p=..."
 ```
 
-**`response_template` combining `Args` and `Body`** — a custom line format for an endpoint `dym` already has a native command for (`dym domain <domain> mailboxes list`), where the domain name itself only ever exists on the request side (the mailboxes endpoint's response has no `domain` field to key off of):
+**`response` template combining `Args` and `Body`** — a custom line format for an endpoint `dym` already has a native command for (`dym domain <domain> mailboxes list`), where the domain name itself only ever exists on the request side:
 
 ```yaml
 extensions:
@@ -242,13 +239,35 @@ extensions:
     url: "{{.BaseURL}}/api/v1/zones/{{.Args.domain}}/mailboxes"
     auth: bearer
     params: [domain]
-    response_template: |-
-      {{$domain := .Args.domain}}{{range .Body.mailboxes}}{{if .enabled}}{{.username}}@{{$domain}}:{{.password_md5}}::::/mail/{{$domain}}/{{.username}}::
-      {{end}}{{end}}
+    response:
+      - template: |-
+          {{$domain := .Args.domain}}{{range .Body.mailboxes}}{{if .enabled}}{{.username}}@{{$domain}}:{{.password_md5}}::::/mail/{{$domain}}/{{.username}}::
+          {{end}}{{end}}
 ```
 
 ```sh
 dym ext mailbox-passwd-lines example.com
 ```
 
-All three examples are illustrative — write your own `extensions.yaml` for whatever internal or Dymmer-adjacent endpoints your workflow needs; `dym` has no bundled extensions.
+**`response` with multiple outputs to files** — generating two different Postfix configuration maps from a single API call:
+
+```yaml
+extensions:
+  mailbox-lines:
+    url: "{{.BaseURL}}/api/v1/zones/{{.Args.domain}}/mailboxes"
+    auth: bearer
+    params: [domain]
+    response:
+      - template: |-
+          {{$domain := .Args.domain}}{{range .Body.mailboxes}}{{if .enabled}}{{.username}}@{{$domain}}	OK
+          {{end}}{{end}}
+      - template: |-
+          {{$domain := .Args.domain}}{{range .Body.mailboxes}}{{if .enabled}}{{.username}}@{{$domain}}	{{.username}}@{{$domain}}
+          {{end}}{{end}}
+```
+
+```sh
+dym ext mailbox-lines example.com --to /etc/postfix/virtual_mailbox_maps --append-to /etc/postfix/sender_login_maps
+```
+
+All examples are illustrative — write your own `extensions.yaml` for whatever internal or Dymmer-adjacent endpoints your workflow needs; `dym` has no bundled extensions.

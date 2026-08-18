@@ -15,24 +15,34 @@ import (
 
 // rawExtensionsFile is the shape of a user-authored extensions.yaml, decoded
 // verbatim before per-extension validation/normalization. Decoding uses
-// strict (KnownFields) mode, so a misspelled key (e.g. "responsepath" for
-// "response_path") is a load-time error rather than a silently-dropped typo.
+// strict (KnownFields) mode, so an unrecognized or removed key (e.g.
+// "response_path" or "response_template") is a load-time error rather than
+// a silently-dropped typo.
 type rawExtensionsFile struct {
 	Extensions map[string]rawExtension `yaml:"extensions"`
+}
+
+// rawResponseEntry is a single response output definition in extensions.yaml.
+type rawResponseEntry struct {
+	Template string `yaml:"template"`
 }
 
 // rawExtension mirrors the extensions.yaml schema for a single extension,
 // field for field, before any defaulting/validation is applied.
 type rawExtension struct {
-	Description      string   `yaml:"description"`
-	URL              string   `yaml:"url"`
-	Method           string   `yaml:"method"`
-	Auth             string   `yaml:"auth"`
-	Token            string   `yaml:"token"`
-	ResponsePath     string   `yaml:"response_path"`
-	Params           []string `yaml:"params"`
-	RequestTemplate  string   `yaml:"request_template"`
-	ResponseTemplate string   `yaml:"response_template"`
+	Description     string             `yaml:"description"`
+	URL             string             `yaml:"url"`
+	Method          string             `yaml:"method"`
+	Auth            string             `yaml:"auth"`
+	Token           string             `yaml:"token"`
+	Params          []string           `yaml:"params"`
+	RequestTemplate string             `yaml:"request_template"`
+	Response        []rawResponseEntry `yaml:"response"`
+}
+
+// responseEntry is a validated, compiled template entry for response rendering.
+type responseEntry struct {
+	Template *template.Template
 }
 
 // extension is a validated, normalized extension definition: method and auth
@@ -41,21 +51,20 @@ type rawExtension struct {
 // use). The url/token/request_template templates are parsed with
 // "missingkey=error" so a typo'd {{.Args.foo}} fails loudly at render time
 // instead of silently rendering the literal string "<no value>" and sending
-// a bogus request. response_template is parsed with the default (lenient)
-// behavior instead, since it executes against arbitrary decoded JSON where a
+// a bogus request. Response templates are parsed with the default (lenient)
+// behavior instead, since they execute against arbitrary decoded JSON where a
 // field being absent on a given response is often legitimate (e.g. an
 // {{if .foo}} guard).
 type extension struct {
-	Name             string
-	Description      string
-	URLTemplate      *template.Template
-	Method           string             // "GET", "POST", "PUT", "PATCH", or "DELETE"
-	Auth             string             // "none" or "bearer"
-	TokenTemplate    *template.Template // nil unless Auth == "bearer"
-	ResponsePath     string
-	Params           []string
-	RequestTemplate  *template.Template // nil when unset
-	ResponseTemplate *template.Template // nil when unset
+	Name            string
+	Description     string
+	URLTemplate     *template.Template
+	Method          string             // "GET", "POST", "PUT", "PATCH", or "DELETE"
+	Auth            string             // "none" or "bearer"
+	TokenTemplate   *template.Template // nil unless Auth == "bearer"
+	Params          []string
+	RequestTemplate *template.Template // nil when unset
+	Response        []responseEntry    // empty when unset
 }
 
 // requestContext is the template data extension url/token/request_template
@@ -68,15 +77,13 @@ type requestContext struct {
 	Args        map[string]string
 }
 
-// responseTemplateContext is the template data response_template renders
-// against. Body is what used to be rendered against directly (the raw
-// decoded JSON response), and Args carries exactly the same
-// {paramName: value} map the request-side templates see — so a
-// response_template can combine data that only exists in the response body
-// with data that only exists in the request (e.g. a domain name declared as
-// a param and interpolated into the URL, but never echoed back by the
-// server in the response body itself). A template that used to write
-// "{{range .domains}}" now writes "{{range .Body.domains}}", and can
+// responseTemplateContext is the template data response templates render
+// against. Body is the raw decoded JSON response, and Args carries exactly the
+// same {paramName: value} map the request-side templates see — so a response
+// template can combine data that only exists in the response body with data that
+// only exists in the request (e.g. a domain name declared as a param and
+// interpolated into the URL, but never echoed back by the server in the
+// response body itself). A template that writes "{{range .Body.domains}}" can
 // additionally reference "{{.Args.domain}}".
 type responseTemplateContext struct {
 	Args map[string]string
@@ -87,7 +94,7 @@ type responseTemplateContext struct {
 // declared params and a subcommand invocation's positional args, in
 // declaration order. Shared by doExtensionRequest (which uses it to build
 // requestContext.Args for url/token/request_template) and
-// newExtensionCommand's response_template branch (which uses it to build
+// newExtensionCommand's response templates branch (which uses it to build
 // responseTemplateContext.Args) so both see identical values for the same
 // invocation.
 func buildArgsMap(ext *extension, args []string) map[string]string {
@@ -219,10 +226,6 @@ func buildExtension(name string, raw rawExtension) (*extension, error) {
 		return nil, fmt.Errorf(`token is set but auth is "none"`)
 	}
 
-	if raw.ResponsePath != "" && raw.ResponseTemplate != "" {
-		return nil, fmt.Errorf("response_path and response_template are mutually exclusive")
-	}
-
 	if raw.RequestTemplate != "" && method == "GET" {
 		return nil, fmt.Errorf("request_template is only valid when method is not GET")
 	}
@@ -260,25 +263,34 @@ func buildExtension(name string, raw rawExtension) (*extension, error) {
 		}
 	}
 
-	var responseTmpl *template.Template
-	if raw.ResponseTemplate != "" {
-		responseTmpl, err = template.New(name + ":response").Parse(raw.ResponseTemplate)
-		if err != nil {
-			return nil, fmt.Errorf("invalid response_template: %w", err)
+	var responseEntries []responseEntry
+	if raw.Response != nil {
+		if len(raw.Response) == 0 {
+			return nil, fmt.Errorf("response list cannot be empty")
+		}
+		responseEntries = make([]responseEntry, len(raw.Response))
+		for i, r := range raw.Response {
+			if strings.TrimSpace(r.Template) == "" {
+				return nil, fmt.Errorf("response[%d]: template is required", i)
+			}
+			tmpl, err := template.New(fmt.Sprintf("%s:response:%d", name, i)).Parse(r.Template)
+			if err != nil {
+				return nil, fmt.Errorf("invalid response template [%d]: %w", i, err)
+			}
+			responseEntries[i] = responseEntry{Template: tmpl}
 		}
 	}
 
 	return &extension{
-		Name:             name,
-		Description:      raw.Description,
-		URLTemplate:      urlTmpl,
-		Method:           method,
-		Auth:             auth,
-		TokenTemplate:    tokenTmpl,
-		ResponsePath:     raw.ResponsePath,
-		Params:           append([]string(nil), raw.Params...),
-		RequestTemplate:  requestTmpl,
-		ResponseTemplate: responseTmpl,
+		Name:            name,
+		Description:     raw.Description,
+		URLTemplate:     urlTmpl,
+		Method:          method,
+		Auth:            auth,
+		TokenTemplate:   tokenTmpl,
+		Params:          append([]string(nil), raw.Params...),
+		RequestTemplate: requestTmpl,
+		Response:        responseEntries,
 	}, nil
 }
 
@@ -297,7 +309,7 @@ func renderTemplate(tmpl *template.Template, data any) (string, error) {
 // api.Record/api.Mailbox/api.Forwarding do (a row's shape is whatever the
 // arbitrary configured endpoint returns), so when --select isn't given this
 // is used as the default field list instead. Rows built from a scalar JSON
-// array are wrapped as {"value": ...} (see the response_path handling in
+// array are wrapped as {"value": ...} (see writeExtensionRows in
 // ext.go), so they contribute just the single key "value" to the union.
 func defaultFieldsFromRows(rows []map[string]any) []string {
 	set := map[string]struct{}{}

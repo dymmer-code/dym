@@ -32,12 +32,12 @@ extensions:
     description: "Authorized mail-server domains"
     url: "{{.BaseURL}}/internal/v1/mail_servers/domains"
     auth: none
-    response_path: domains
   zone-txt-records:
     url: "{{.BaseURL}}/api/v1/zones/{{.Args.domain}}/records"
     auth: bearer
-    response_path: records
     params: [domain]
+    response:
+      - template: "{{range .Body.records}}{{.id}}\n{{end}}"
 `)
 	load := loadExtensionsFile(path)
 	if load.FileErr != nil {
@@ -62,6 +62,9 @@ extensions:
 	if md.Auth != "none" {
 		t.Fatalf("expected auth none, got %q", md.Auth)
 	}
+	if len(md.Response) != 0 {
+		t.Fatalf("expected 0 response templates for mail-domains, got %d", len(md.Response))
+	}
 	ztr := load.Extensions["zone-txt-records"]
 	if ztr == nil {
 		t.Fatal("zone-txt-records not loaded")
@@ -71,6 +74,9 @@ extensions:
 	}
 	if ztr.TokenTemplate == nil {
 		t.Fatal("expected a default token template for auth: bearer")
+	}
+	if len(ztr.Response) != 1 || ztr.Response[0].Template == nil {
+		t.Fatal("expected 1 compiled response template for zone-txt-records")
 	}
 }
 
@@ -135,11 +141,76 @@ func TestLoadExtensionsFileTokenSetWithAuthNoneIsValidationError(t *testing.T) {
 	}
 }
 
-func TestLoadExtensionsFileResponsePathAndTemplateMutuallyExclusive(t *testing.T) {
-	path := writeExtensionsYAML(t, "extensions:\n  bad:\n    url: \"http://example.com\"\n    response_path: domains\n    response_template: \"{{.}}\"\n")
+func TestLoadExtensionsFileOldResponsePathIsRejected(t *testing.T) {
+	path := writeExtensionsYAML(t, `
+extensions:
+  bad:
+    url: "http://example.com"
+    response_path: domains
+`)
 	load := loadExtensionsFile(path)
-	if len(load.Skipped) != 1 || !strings.Contains(load.Skipped[0].Reason, "mutually exclusive") {
-		t.Fatalf("expected a mutual-exclusion validation error, got %v", load.Skipped)
+	if load.FileErr == nil {
+		t.Fatal("expected FileErr for legacy response_path")
+	}
+	if !strings.Contains(load.FileErr.Error(), "response_path") {
+		t.Fatalf("expected response_path in error message, got %v", load.FileErr)
+	}
+}
+
+func TestLoadExtensionsFileOldResponseTemplateIsRejected(t *testing.T) {
+	path := writeExtensionsYAML(t, `
+extensions:
+  bad:
+    url: "http://example.com"
+    response_template: "{{.}}"
+`)
+	load := loadExtensionsFile(path)
+	if load.FileErr == nil {
+		t.Fatal("expected FileErr for legacy response_template")
+	}
+	if !strings.Contains(load.FileErr.Error(), "response_template") {
+		t.Fatalf("expected response_template in error message, got %v", load.FileErr)
+	}
+}
+
+func TestLoadExtensionsFileEmptyResponseListIsValidationError(t *testing.T) {
+	path := writeExtensionsYAML(t, `
+extensions:
+  bad:
+    url: "http://example.com"
+    response: []
+`)
+	load := loadExtensionsFile(path)
+	if len(load.Skipped) != 1 || !strings.Contains(load.Skipped[0].Reason, "response list cannot be empty") {
+		t.Fatalf("expected empty response list validation error, got %v", load.Skipped)
+	}
+}
+
+func TestLoadExtensionsFileEmptyTemplateInResponseIsValidationError(t *testing.T) {
+	path := writeExtensionsYAML(t, `
+extensions:
+  bad:
+    url: "http://example.com"
+    response:
+      - template: "   "
+`)
+	load := loadExtensionsFile(path)
+	if len(load.Skipped) != 1 || !strings.Contains(load.Skipped[0].Reason, "template is required") {
+		t.Fatalf("expected template required validation error, got %v", load.Skipped)
+	}
+}
+
+func TestLoadExtensionsFileInvalidResponseTemplateSyntaxIsValidationError(t *testing.T) {
+	path := writeExtensionsYAML(t, `
+extensions:
+  bad:
+    url: "http://example.com"
+    response:
+      - template: "{{.unclosed"
+`)
+	load := loadExtensionsFile(path)
+	if len(load.Skipped) != 1 || !strings.Contains(load.Skipped[0].Reason, "invalid response template") {
+		t.Fatalf("expected invalid response template validation error, got %v", load.Skipped)
 	}
 }
 
@@ -206,39 +277,14 @@ func TestDefaultFieldsFromRowsEmpty(t *testing.T) {
 	}
 }
 
-// --- response_path resolution against a nested response ---
-
-func TestResponsePathResolutionMailServersDomainsShape(t *testing.T) {
-	var decoded any
-	body := `{"status":"ok","domains":["a.example.com","b.example.com"]}`
-	if err := json.Unmarshal([]byte(body), &decoded); err != nil {
-		t.Fatal(err)
-	}
-	m, ok := decoded.(map[string]any)
-	if !ok {
-		t.Fatal("expected a JSON object")
-	}
-	v, ok := getPath(m, "domains")
-	if !ok {
-		t.Fatal("expected domains to resolve")
-	}
-	arr, ok := v.([]any)
-	if !ok || len(arr) != 2 {
-		t.Fatalf("expected a 2-element array, got %#v", v)
-	}
-	if arr[0] != "a.example.com" || arr[1] != "b.example.com" {
-		t.Fatalf("unexpected array contents: %v", arr)
-	}
-}
-
 // --- Integration tests via NewRootCommand ---
 
-func TestExtGetWithResponsePathTableOutput(t *testing.T) {
+func TestExtGetTableOutput(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/internal/v1/mail_servers/domains" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
-		_, _ = w.Write([]byte(`{"status":"ok","domains":["a.example.com","b.example.com"]}`))
+		_, _ = w.Write([]byte(`["a.example.com","b.example.com"]`))
 	}))
 	defer srv.Close()
 
@@ -248,7 +294,6 @@ extensions:
     description: "domains"
     url: "{{.BaseURL}}/internal/v1/mail_servers/domains"
     auth: none
-    response_path: domains
 `)
 
 	out := new(bytes.Buffer)
@@ -263,9 +308,9 @@ extensions:
 	}
 }
 
-func TestExtGetWithResponsePathJSONOutput(t *testing.T) {
+func TestExtGetJSONOutput(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"domains":["a.example.com","b.example.com"]}`))
+		_, _ = w.Write([]byte(`["a.example.com","b.example.com"]`))
 	}))
 	defer srv.Close()
 
@@ -274,7 +319,6 @@ extensions:
   mail-domains:
     url: "{{.BaseURL}}/internal/v1/mail_servers/domains"
     auth: none
-    response_path: domains
 `)
 
 	out := new(bytes.Buffer)
@@ -291,7 +335,7 @@ extensions:
 
 func TestExtGetWithSelectAndFilter(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"records":[{"id":"1","type":"A"},{"id":"2","type":"TXT"}]}`))
+		_, _ = w.Write([]byte(`[{"id":"1","type":"A"},{"id":"2","type":"TXT"}]`))
 	}))
 	defer srv.Close()
 
@@ -300,7 +344,6 @@ extensions:
   recs:
     url: "{{.BaseURL}}/records"
     auth: none
-    response_path: records
 `)
 
 	out := new(bytes.Buffer)
@@ -319,7 +362,7 @@ func TestExtBearerAuthSendsAuthorizationHeader(t *testing.T) {
 	var gotAuth string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
-		_, _ = w.Write([]byte(`{"records":[]}`))
+		_, _ = w.Write([]byte(`[]`))
 	}))
 	defer srv.Close()
 
@@ -328,7 +371,6 @@ extensions:
   recs:
     url: "{{.BaseURL}}/records"
     auth: bearer
-    response_path: records
 `)
 
 	out := new(bytes.Buffer)
@@ -348,7 +390,7 @@ func TestExtAuthNoneSendsNoAuthorizationHeaderAndNeverTouchesStore(t *testing.T)
 	var sawAuthHeader bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth, sawAuthHeader = r.Header.Get("Authorization"), r.Header.Get("Authorization") != ""
-		_, _ = w.Write([]byte(`{"domains":[]}`))
+		_, _ = w.Write([]byte(`[]`))
 	}))
 	defer srv.Close()
 
@@ -357,7 +399,6 @@ extensions:
   mail-domains:
     url: "{{.BaseURL}}/internal/v1/mail_servers/domains"
     auth: none
-    response_path: domains
 `)
 
 	out := new(bytes.Buffer)
@@ -384,7 +425,7 @@ func TestExtParamsInterpolatedIntoURL(t *testing.T) {
 	var gotPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
-		_, _ = w.Write([]byte(`{"records":[]}`))
+		_, _ = w.Write([]byte(`[]`))
 	}))
 	defer srv.Close()
 
@@ -393,7 +434,6 @@ extensions:
   zone-txt-records:
     url: "{{.BaseURL}}/api/v1/zones/{{.Args.domain}}/records"
     auth: none
-    response_path: records
     params: [domain]
 `)
 
@@ -415,7 +455,7 @@ func TestExtPOSTRequestTemplateSendsRenderedJSONBody(t *testing.T) {
 		body := new(bytes.Buffer)
 		_, _ = body.ReadFrom(r.Body)
 		gotBody = body.String()
-		_, _ = w.Write([]byte(`{"records":[{"id":"1"}]}`))
+		_, _ = w.Write([]byte(`[{"id":"1"}]`))
 	}))
 	defer srv.Close()
 
@@ -428,7 +468,6 @@ extensions:
     params: [domain, value]
     request_template: |
       {"record":{"host":"mail._domainkey","type":"TXT","content_value":"{{.Args.value}}"}}
-    response_path: records
 `)
 
 	out := new(bytes.Buffer)
@@ -459,7 +498,7 @@ func TestExtMalformedFilterIsRejectedBeforeThePOSTFires(t *testing.T) {
 	var hits int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		hits++
-		_, _ = w.Write([]byte(`{"records":[{"id":"1"}]}`))
+		_, _ = w.Write([]byte(`[{"id":"1"}]`))
 	}))
 	defer srv.Close()
 
@@ -472,7 +511,6 @@ extensions:
     params: [domain, value]
     request_template: |
       {"record":{"host":"mail._domainkey","type":"TXT","content_value":"{{.Args.value}}"}}
-    response_path: records
 `)
 
 	out := new(bytes.Buffer)
@@ -523,9 +561,10 @@ extensions:
   mail-domains-pretty:
     url: "{{.BaseURL}}/internal/v1/mail_servers/domains"
     auth: none
-    response_template: |-
-      {{range .Body.domains}}{{.}}
-      {{end}}
+    response:
+      - template: |-
+          {{range .Body.domains}}{{.}}
+          {{end}}
 `)
 
 	out := new(bytes.Buffer)
@@ -539,7 +578,7 @@ extensions:
 		t.Fatalf("got %q, want %q", out.String(), want)
 	}
 
-	// --select must not be a registered flag on a response_template extension.
+	// --select must not be a registered flag on a response template extension.
 	out2 := new(bytes.Buffer)
 	cmd2 := NewRootCommand(Dependencies{Out: out2, Err: new(bytes.Buffer), BaseURL: srv.URL, ExtensionsFile: path})
 	cmd2.SetArgs([]string{"ext", "mail-domains-pretty", "--select", "domains"})
@@ -548,7 +587,7 @@ extensions:
 	}
 }
 
-// response_template must be able to combine data that only exists in the
+// Response templates must be able to combine data that only exists in the
 // response body (Body) with data that only exists in the request (Args) —
 // e.g. a domain name declared as a param and interpolated into the URL, but
 // never echoed back by the server in the response body itself. This mirrors
@@ -567,8 +606,9 @@ extensions:
     url: "{{.BaseURL}}/api/v1/zones/{{.Args.domain}}/mailboxes"
     auth: none
     params: [domain]
-    response_template: |-
-      {{$domain := .Args.domain}}{{range .Body.mailboxes}}{{if .enabled}}{{.username}}@{{$domain}}:{{.password_md5}}{{"\n"}}{{end}}{{end}}
+    response:
+      - template: |-
+          {{$domain := .Args.domain}}{{range .Body.mailboxes}}{{if .enabled}}{{.username}}@{{$domain}}:{{.password_md5}}{{"\n"}}{{end}}{{end}}
 `)
 
 	out := new(bytes.Buffer)
@@ -580,6 +620,183 @@ extensions:
 	want := "alice@example.com:abc123\n"
 	if out.String() != want {
 		t.Fatalf("got %q, want %q", out.String(), want)
+	}
+}
+
+func TestExtSingleTemplateWithToAndAppendTo(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"msg":"hello"}`))
+	}))
+	defer srv.Close()
+
+	path := writeExtensionsYAML(t, `
+extensions:
+  single:
+    url: "{{.BaseURL}}/x"
+    auth: none
+    response:
+      - template: "{{.Body.msg}}\n"
+`)
+
+	tmpDir := t.TempDir()
+	outFile := filepath.Join(tmpDir, "out.txt")
+
+	// 1. Write with --to
+	cmd := NewRootCommand(Dependencies{Out: new(bytes.Buffer), Err: new(bytes.Buffer), BaseURL: srv.URL, ExtensionsFile: path})
+	cmd.SetArgs([]string{"ext", "single", "--to", outFile})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "hello\n" {
+		t.Fatalf("got %q, want hello\\n", string(content))
+	}
+
+	// 2. Append with --append-to
+	cmd = NewRootCommand(Dependencies{Out: new(bytes.Buffer), Err: new(bytes.Buffer), BaseURL: srv.URL, ExtensionsFile: path})
+	cmd.SetArgs([]string{"ext", "single", "--append-to", outFile})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	content, err = os.ReadFile(outFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "hello\nhello\n" {
+		t.Fatalf("got %q, want hello\\nhello\\n", string(content))
+	}
+
+	// 3. Overwrite with --to
+	cmd = NewRootCommand(Dependencies{Out: new(bytes.Buffer), Err: new(bytes.Buffer), BaseURL: srv.URL, ExtensionsFile: path})
+	cmd.SetArgs([]string{"ext", "single", "--to", outFile})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	content, err = os.ReadFile(outFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "hello\n" {
+		t.Fatalf("got %q, want hello\\n (overwritten)", string(content))
+	}
+
+	// 4. Too many flags for single template -> error before request
+	cmd = NewRootCommand(Dependencies{Out: new(bytes.Buffer), Err: new(bytes.Buffer), BaseURL: srv.URL, ExtensionsFile: path})
+	cmd.SetArgs([]string{"ext", "single", "--to", outFile, "--append-to", outFile})
+	err = cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "declares 1 response template but got 2") {
+		t.Fatalf("expected flag count error, got %v", err)
+	}
+}
+
+func TestExtMultipleTemplatesRoutingAndFlagOrdering(t *testing.T) {
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits++
+		_, _ = w.Write([]byte(`{"domain":"example.com","users":["alice","bob"]}`))
+	}))
+	defer srv.Close()
+
+	path := writeExtensionsYAML(t, `
+extensions:
+  multi:
+    url: "{{.BaseURL}}/x"
+    auth: none
+    response:
+      - template: |-
+          {{range .Body.users}}{{.}}@{{$.Body.domain}} OK
+          {{end}}
+      - template: |-
+          {{range .Body.users}}{{.}}@{{$.Body.domain}} {{.}}
+          {{end}}
+`)
+
+	tmpDir := t.TempDir()
+	file1 := filepath.Join(tmpDir, "file1.txt")
+	file2 := filepath.Join(tmpDir, "file2.txt")
+
+	// 1. Missing flags (0 flags for 2 templates) -> rejected before HTTP request
+	cmd := NewRootCommand(Dependencies{Out: new(bytes.Buffer), Err: new(bytes.Buffer), BaseURL: srv.URL, ExtensionsFile: path})
+	cmd.SetArgs([]string{"ext", "multi"})
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "declares 2 response templates but got 0") {
+		t.Fatalf("expected error for 0 flags on 2 templates, got %v", err)
+	}
+	if hits != 0 {
+		t.Fatalf("expected 0 HTTP hits, got %d", hits)
+	}
+
+	// 2. 1 flag for 2 templates -> rejected before HTTP request
+	cmd = NewRootCommand(Dependencies{Out: new(bytes.Buffer), Err: new(bytes.Buffer), BaseURL: srv.URL, ExtensionsFile: path})
+	cmd.SetArgs([]string{"ext", "multi", "--to", file1})
+	err = cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "declares 2 response templates but got 1") {
+		t.Fatalf("expected error for 1 flag on 2 templates, got %v", err)
+	}
+	if hits != 0 {
+		t.Fatalf("expected 0 HTTP hits, got %d", hits)
+	}
+
+	// 3. Exactly 2 flags: --to file1 --append-to file2
+	cmd = NewRootCommand(Dependencies{Out: new(bytes.Buffer), Err: new(bytes.Buffer), BaseURL: srv.URL, ExtensionsFile: path})
+	cmd.SetArgs([]string{"ext", "multi", "--to", file1, "--append-to", file2})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if hits != 1 {
+		t.Fatalf("expected 1 HTTP hit, got %d", hits)
+	}
+
+	c1, err := os.ReadFile(file1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want1 := "alice@example.com OK\nbob@example.com OK\n"
+	if string(c1) != want1 {
+		t.Fatalf("file1: got %q, want %q", string(c1), want1)
+	}
+
+	c2, err := os.ReadFile(file2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want2 := "alice@example.com alice\nbob@example.com bob\n"
+	if string(c2) != want2 {
+		t.Fatalf("file2: got %q, want %q", string(c2), want2)
+	}
+
+	// 4. Test append behavior on second execution
+	cmd = NewRootCommand(Dependencies{Out: new(bytes.Buffer), Err: new(bytes.Buffer), BaseURL: srv.URL, ExtensionsFile: path})
+	cmd.SetArgs([]string{"ext", "multi", "--to", file1, "--append-to", file2})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+
+	// file1 was overwritten (--to)
+	c1, _ = os.ReadFile(file1)
+	if string(c1) != want1 {
+		t.Fatalf("file1 after overwrite: got %q, want %q", string(c1), want1)
+	}
+
+	// file2 was appended (--append-to)
+	c2, _ = os.ReadFile(file2)
+	if string(c2) != want2+want2 {
+		t.Fatalf("file2 after append: got %q, want %q", string(c2), want2+want2)
+	}
+
+	// 5. Reverse flag order: --append-to file2 --to file1 (order in args determines mapping!)
+	cmd = NewRootCommand(Dependencies{Out: new(bytes.Buffer), Err: new(bytes.Buffer), BaseURL: srv.URL, ExtensionsFile: path})
+	cmd.SetArgs([]string{"ext", "multi", "--append-to", file2, "--to", file1})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	// Template 1 went to file2 (appended), Template 2 went to file1 (overwritten)
+	c1, _ = os.ReadFile(file1)
+	if string(c1) != want2 {
+		t.Fatalf("file1 with template 2: got %q, want %q", string(c1), want2)
 	}
 }
 
@@ -651,7 +868,6 @@ extensions:
   mail-domains:
     url: "{{.BaseURL}}/internal/v1/mail_servers/domains"
     auth: none
-    response_path: domains
 `)
 
 	out := new(bytes.Buffer)
@@ -749,21 +965,6 @@ extensions:
 		t.Fatalf("expected a clear truncation error, got %v", err)
 	}
 }
-
-// A dedicated "large non-2xx body" test was considered and deliberately
-// dropped (fix round 2): it only asserted the final error string stayed
-// under an arbitrary byte count, which the pre-LimitReader code (that
-// buffered the whole body via io.ReadAll before truncating only the
-// *display* snippet) would have passed too — the 500-byte error snippet cap
-// already existed before this round's fix and was never the actual bug.
-// TestExtLargeSuccessResponseIsBoundedNotBuffered above is what actually
-// exercises the maxExtensionResponseBytes/LimitReader change (a 2xx body
-// just over the cap must produce the new, distinct truncation error, which
-// only exists because of this round's fix); TestExtNon2xxResponseIsClearError
-// separately covers the non-2xx error-message shape at normal size. Neither
-// test — nor any unit test — can literally prove peak memory usage stayed
-// bounded; io.LimitReader's own well-established semantics are relied on
-// for that guarantee.
 
 // Item 3: a bearer token embedded in the url template must never appear in
 // an error message — only the redacted stand-in should.
@@ -1035,7 +1236,7 @@ func TestExtTypoedArgsFieldErrorsInsteadOfNoValue(t *testing.T) {
 	called := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		called = true
-		_, _ = w.Write([]byte(`{}`))
+		_, _ = w.Write([]byte(`[]`))
 	}))
 	defer srv.Close()
 
@@ -1129,8 +1330,7 @@ extensions:
 	}
 }
 
-// Item 10: the no-response_path error variant must read as "the response
-// body", not as a literal path string like "(response body)".
+// Item 10: error when response body is not a JSON array in default tabular mode.
 func TestExtArrayTypeErrorMessageVariants(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"not":"an array"}`))
@@ -1151,8 +1351,5 @@ extensions:
 	}
 	if !strings.Contains(err.Error(), "expected the response body to be a JSON array") {
 		t.Fatalf("unexpected message for the no-path case: %v", err)
-	}
-	if strings.Contains(err.Error(), `response_path ""`) {
-		t.Fatalf("no-path message should not read like a literal path string: %v", err)
 	}
 }

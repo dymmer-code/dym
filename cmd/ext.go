@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -232,39 +233,72 @@ func newExtListCommand(path string, load extensionsLoad) *cobra.Command {
 	}
 }
 
+// outputDestination tracks a target file path and whether to append or truncate.
+type outputDestination struct {
+	Path   string
+	Append bool
+}
+
+// destFlag implements pflag.Value to record --to and --append-to flags in their
+// exact order of appearance on the command line.
+type destFlag struct {
+	dests  *[]outputDestination
+	append bool
+}
+
+func (f *destFlag) String() string {
+	return ""
+}
+
+func (f *destFlag) Set(val string) error {
+	*f.dests = append(*f.dests, outputDestination{Path: val, Append: f.append})
+	return nil
+}
+
+func (f *destFlag) Type() string {
+	return "string"
+}
+
 // newExtensionCommand builds the generated subcommand for a single validated
-// extension. When the extension has a response_template, --filter/--select/
-// --output are not registered at all: the template fully owns the output
-// shape, so there is nothing for those flags to act on. response_template
-// renders against a responseTemplateContext{Args, Body} — Body is the
-// decoded JSON response (what it used to render directly against), and Args
-// is the same {paramName: value} map the request-side templates see, so a
-// response_template can combine response data with request-time params the
-// server never echoes back (e.g. a domain name that only ever appears in
-// the URL).
+// extension. When the extension defines response templates, --filter/--select/
+// --output are not registered at all: the templates fully own the output
+// shape. Instead, --to and --append-to are registered to route template
+// outputs to files. Response templates render against a
+// responseTemplateContext{Args, Body} — Body is the decoded JSON response,
+// and Args is the same {paramName: value} map the request-side templates see.
 func newExtensionCommand(deps Dependencies, ext *extension) *cobra.Command {
 	use := ext.Name
 	for _, p := range ext.Params {
 		use += " <" + p + ">"
 	}
-	hasTemplate := ext.ResponseTemplate != nil
+	hasResponse := len(ext.Response) > 0
 
 	var output, selectFields string
 	var filterArgs []string
+	var dests []outputDestination
 
 	cmd := &cobra.Command{
 		Use:   use,
 		Short: ext.Description,
 		Args:  cobra.ExactArgs(len(ext.Params)),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// --output/--filter/--select are validated up front, before any
-			// HTTP call, exactly like every native list command
-			// (cmd/domain.go's newRecordsListCommand parses/validates
-			// before resolveAPI): a typo'd --filter must not let a
-			// mutating POST fire first.
+			// --output/--filter/--select (or --to/--append-to) are validated
+			// up front before any HTTP call, exactly like every native list
+			// command: an invalid flag count or typo'd --filter must not let
+			// a mutating POST fire first.
 			var filters []fieldFilter
 			var fields []string
-			if !hasTemplate {
+			if hasResponse {
+				if len(ext.Response) == 1 {
+					if len(dests) > 1 {
+						return fmt.Errorf("extension %q declares 1 response template but got %d --to/--append-to flags", ext.Name, len(dests))
+					}
+				} else {
+					if len(dests) != len(ext.Response) {
+						return fmt.Errorf("extension %q declares %d response templates but got %d --to/--append-to flags", ext.Name, len(ext.Response), len(dests))
+					}
+				}
+			} else {
 				if output != "table" && output != "json" && output != "csv" && output != "tsv" {
 					return errors.New(`--output must be "table", "json", "csv", or "tsv"`)
 				}
@@ -288,21 +322,51 @@ func newExtensionCommand(deps Dependencies, ext *extension) *cobra.Command {
 				}
 			}
 
-			if hasTemplate {
+			if hasResponse {
 				tmplCtx := responseTemplateContext{Args: buildArgsMap(ext, args), Body: decoded}
-				rendered, err := renderTemplate(ext.ResponseTemplate, tmplCtx)
-				if err != nil {
-					return fmt.Errorf("extension %q: rendering response_template: %w", ext.Name, err)
+				rendered := make([]string, len(ext.Response))
+				for i, entry := range ext.Response {
+					r, err := renderTemplate(entry.Template, tmplCtx)
+					if err != nil {
+						return fmt.Errorf("extension %q: rendering response template [%d]: %w", ext.Name, i, err)
+					}
+					rendered[i] = r
 				}
-				_, err = io.WriteString(cmd.OutOrStdout(), rendered)
-				return err
+
+				if len(dests) == 0 {
+					_, err := io.WriteString(cmd.OutOrStdout(), rendered[0])
+					return err
+				}
+
+				for i, d := range dests {
+					flags := os.O_CREATE | os.O_WRONLY | os.O_TRUNC
+					if d.Append {
+						flags = os.O_CREATE | os.O_WRONLY | os.O_APPEND
+					}
+					f, err := os.OpenFile(d.Path, flags, 0o666)
+					if err != nil {
+						return fmt.Errorf("extension %q: opening %s: %w", ext.Name, d.Path, err)
+					}
+					_, writeErr := f.WriteString(rendered[i])
+					closeErr := f.Close()
+					if writeErr != nil {
+						return fmt.Errorf("extension %q: writing %s: %w", ext.Name, d.Path, writeErr)
+					}
+					if closeErr != nil {
+						return fmt.Errorf("extension %q: closing %s: %w", ext.Name, d.Path, closeErr)
+					}
+				}
+				return nil
 			}
 
 			return writeExtensionRows(cmd, ext, decoded, filters, fields, output)
 		},
 	}
 
-	if !hasTemplate {
+	if hasResponse {
+		cmd.Flags().Var(&destFlag{dests: &dests, append: false}, "to", "Write template output to file (overwrites)")
+		cmd.Flags().Var(&destFlag{dests: &dests, append: true}, "append-to", "Append template output to file")
+	} else {
 		cmd.Flags().StringVarP(&output, "output", "o", "table", `Output format: "table", "json", "csv", or "tsv"`)
 		addFilterAndSelectFlags(cmd, &filterArgs, &selectFields)
 	}
@@ -461,35 +525,14 @@ func doExtensionRequest(ctx context.Context, deps Dependencies, ext *extension, 
 	return respBody, nil
 }
 
-// writeExtensionRows implements the response_path pipeline: resolve
-// response_path (or treat the whole decoded body as the row array when
-// unset), require the target to be a JSON array, wrap scalar elements as
-// {"value": elem}, apply the already-parsed filters/fields, and render via
-// the same writeSelectedTable/JSON/Delimited helpers the built-in list
-// commands use. filters/fields are parsed by the caller before the HTTP
-// call fires (see newExtensionCommand); fields being empty here means
-// --select was not given, so the default column set is computed from the
-// rows actually returned.
+// writeExtensionRows formats and writes rows when an extension has no
+// response templates configured: requires decoded to be a JSON array, wraps
+// scalar elements as {"value": elem}, applies the already-parsed
+// filters/fields, and renders via writeSelectedTable/JSON/Delimited.
 func writeExtensionRows(cmd *cobra.Command, ext *extension, decoded any, filters []fieldFilter, fields []string, output string) error {
-	target := decoded
-	if ext.ResponsePath != "" {
-		m, ok := decoded.(map[string]any)
-		if !ok {
-			return fmt.Errorf("extension %q: response_path %q: response body is not a JSON object", ext.Name, ext.ResponsePath)
-		}
-		v, ok := getPath(m, ext.ResponsePath)
-		if !ok {
-			return fmt.Errorf("extension %q: response_path %q did not resolve in the response", ext.Name, ext.ResponsePath)
-		}
-		target = v
-	}
-
-	arr, ok := target.([]any)
+	arr, ok := decoded.([]any)
 	if !ok {
-		if ext.ResponsePath == "" {
-			return fmt.Errorf("extension %q: expected the response body to be a JSON array, got %T", ext.Name, target)
-		}
-		return fmt.Errorf("extension %q: expected an array at response_path %q, got %T", ext.Name, ext.ResponsePath, target)
+		return fmt.Errorf("extension %q: expected the response body to be a JSON array, got %T", ext.Name, decoded)
 	}
 	rows := make([]map[string]any, 0, len(arr))
 	for _, elem := range arr {
