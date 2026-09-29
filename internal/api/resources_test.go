@@ -401,3 +401,42 @@ func TestListRecordsEscapesDomainSegment(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestGetAuthStatusParsesScopedResponse(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/auth/status" {
+			t.Fatal(r.URL.Path)
+		}
+		io.WriteString(w, `{"status":"ok","unrestricted":false,"scopes":["record:read"],"constraints":{"domain_id":"d-1"}}`)
+	}))
+	defer s.Close()
+
+	status, err := NewClient(s.URL, "tok", s.Client()).GetAuthStatus(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Unrestricted {
+		t.Fatal("expected restricted")
+	}
+	if len(status.Scopes) != 1 || status.Scopes[0] != "record:read" {
+		t.Fatalf("unexpected scopes: %+v", status.Scopes)
+	}
+	if status.Constraints["domain_id"] != "d-1" {
+		t.Fatalf("unexpected constraints: %+v", status.Constraints)
+	}
+}
+
+func TestGetAuthStatusParsesUnrestrictedResponse(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"status":"ok","unrestricted":true,"scopes":[],"constraints":{}}`)
+	}))
+	defer s.Close()
+
+	status, err := NewClient(s.URL, "tok", s.Client()).GetAuthStatus(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.Unrestricted {
+		t.Fatal("expected unrestricted")
+	}
+}

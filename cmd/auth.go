@@ -3,8 +3,10 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
+	"github.com/dymmer-code/dym/internal/api"
 	"github.com/dymmer-code/dym/internal/credentials"
 	"github.com/spf13/cobra"
 )
@@ -70,7 +72,7 @@ func newAuthLogoutCommand(deps Dependencies) *cobra.Command {
 func newAuthStatusCommand(deps Dependencies) *cobra.Command {
 	return &cobra.Command{
 		Use:   "status",
-		Short: "Show which credential source will be used",
+		Short: "Show which credential source will be used and its scopes",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			_, source, err := credentials.Resolve(deps.Env, deps.Store)
 			if err != nil {
@@ -78,7 +80,38 @@ func newAuthStatusCommand(deps Dependencies) *cobra.Command {
 				return nil
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "Authenticated via %s.\n", source)
+
+			client, err := resolveAPI(deps)
+			if err != nil {
+				return nil
+			}
+			status, err := client.GetAuthStatus(cmd.Context())
+			if err != nil {
+				fmt.Fprintf(cmd.OutOrStdout(), "Could not verify token scope: %v\n", wrapAuthError(err))
+				return nil
+			}
+			printAuthStatus(cmd, status)
 			return nil
 		},
+	}
+}
+
+func printAuthStatus(cmd *cobra.Command, status *api.AuthStatus) {
+	switch {
+	case status.Unrestricted:
+		fmt.Fprintln(cmd.OutOrStdout(), "Scope: full access (unrestricted).")
+	case len(status.Scopes) == 0:
+		fmt.Fprintln(cmd.OutOrStdout(), "Scope: none -- this token can't do anything.")
+	default:
+		fmt.Fprintf(cmd.OutOrStdout(), "Scopes: %s\n", strings.Join(status.Scopes, ", "))
+	}
+
+	keys := make([]string, 0, len(status.Constraints))
+	for k := range status.Constraints {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		fmt.Fprintf(cmd.OutOrStdout(), "Restricted %s: %s\n", k, status.Constraints[k])
 	}
 }

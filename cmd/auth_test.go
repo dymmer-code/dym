@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/dymmer-code/dym/internal/api"
 )
 
 type fakeStore struct {
@@ -78,7 +80,10 @@ func TestLogoutRemovesTokenWithoutLeaking(t *testing.T) {
 
 func TestStatusReportsEnvironmentSourceWithoutToken(t *testing.T) {
 	out := new(bytes.Buffer)
-	cmd := NewRootCommand(Dependencies{Out: out, Err: new(bytes.Buffer), Store: &fakeStore{}, Env: func(string) string { return "env-token" }})
+	cmd := NewRootCommand(Dependencies{
+		Out: out, Err: new(bytes.Buffer), Store: &fakeStore{}, Env: func(string) string { return "env-token" },
+		API: &fakeAPI{authStatus: &api.AuthStatus{Unrestricted: true}},
+	})
 	cmd.SetArgs([]string{"auth", "status"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
@@ -90,12 +95,52 @@ func TestStatusReportsEnvironmentSourceWithoutToken(t *testing.T) {
 
 func TestStatusReportsKeychainSourceWithoutToken(t *testing.T) {
 	out := new(bytes.Buffer)
-	cmd := NewRootCommand(Dependencies{Out: out, Err: new(bytes.Buffer), Store: &fakeStore{token: "keychain-token"}, Env: func(string) string { return "" }})
+	cmd := NewRootCommand(Dependencies{
+		Out: out, Err: new(bytes.Buffer), Store: &fakeStore{token: "keychain-token"}, Env: func(string) string { return "" },
+		API: &fakeAPI{authStatus: &api.AuthStatus{Unrestricted: true}},
+	})
 	cmd.SetArgs([]string{"auth", "status"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "keychain") || strings.Contains(out.String(), "keychain-token") {
+		t.Fatalf("status = %q", out.String())
+	}
+}
+
+func TestStatusShowsScopesAndConstraints(t *testing.T) {
+	out := new(bytes.Buffer)
+	cmd := NewRootCommand(Dependencies{
+		Out: out, Err: new(bytes.Buffer), Store: &fakeStore{token: "tok"}, Env: func(string) string { return "" },
+		API: &fakeAPI{authStatus: &api.AuthStatus{
+			Scopes:      []string{"record:read", "record:create"},
+			Constraints: map[string]string{"domain_id": "abc-123"},
+		}},
+	})
+	cmd.SetArgs([]string{"auth", "status"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "record:read, record:create") {
+		t.Fatalf("status = %q", got)
+	}
+	if !strings.Contains(got, "Restricted domain_id: abc-123") {
+		t.Fatalf("status = %q", got)
+	}
+}
+
+func TestStatusReportsUnverifiableScope(t *testing.T) {
+	out := new(bytes.Buffer)
+	cmd := NewRootCommand(Dependencies{
+		Out: out, Err: new(bytes.Buffer), Store: &fakeStore{token: "tok"}, Env: func(string) string { return "" },
+		API: &fakeAPI{authStatusErr: errors.New("network down")},
+	})
+	cmd.SetArgs([]string{"auth", "status"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Could not verify token scope") {
 		t.Fatalf("status = %q", out.String())
 	}
 }

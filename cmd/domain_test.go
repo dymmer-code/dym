@@ -44,6 +44,9 @@ type fakeAPI struct {
 	lastSecretsEnv        string
 	lastSecretsDeployment string
 	lastSecretsFormat     string
+
+	authStatus    *api.AuthStatus
+	authStatusErr error
 }
 
 func (f *fakeAPI) ListRecords(_ context.Context, domain, recordType string) ([]api.Record, error) {
@@ -117,6 +120,16 @@ func (f *fakeAPI) GetSecrets(_ context.Context, project, env, deployment, format
 		return f.secretsResult, nil
 	}
 	return &api.SecretsResult{}, nil
+}
+
+func (f *fakeAPI) GetAuthStatus(_ context.Context) (*api.AuthStatus, error) {
+	if f.authStatusErr != nil {
+		return nil, f.authStatusErr
+	}
+	if f.authStatus != nil {
+		return f.authStatus, nil
+	}
+	return &api.AuthStatus{Unrestricted: true}, nil
 }
 
 func terminalTrue() bool  { return true }

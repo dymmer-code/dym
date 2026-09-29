@@ -24,6 +24,7 @@ type APIClient interface {
 	ListMailboxes(ctx context.Context, domain string) ([]api.Mailbox, error)
 	ListForwardings(ctx context.Context, domain string) ([]api.Forwarding, error)
 	GetSecrets(ctx context.Context, project, env, deployment, format string) (*api.SecretsResult, error)
+	GetAuthStatus(ctx context.Context) (*api.AuthStatus, error)
 }
 
 const defaultBaseURL = "https://dymmer.com/api/v1"

@@ -31,10 +31,16 @@ You'll be prompted to paste the token; it is saved to the system credential stor
 Other auth commands:
 
 ```sh
-dym auth status       # show which credential source will be used
+dym auth status       # show which credential source will be used, plus its scopes
 dym auth logout       # remove the saved token from the keychain
 dym auth token-help   # print instructions for obtaining a token
 ```
+
+At https://dymmer.com/keys you can also create several named, scoped tokens
+instead of the single full-access one -- e.g. one limited to DNS records on a
+single domain for a CI server, so it can't touch the rest of the account.
+`dym auth status` reports the scopes and any domain/project restriction of
+whichever token is in use.
 
 ### Environment override
 
@@ -52,7 +58,7 @@ export DYMMER_TOKEN=your-token-here
 | --- | --- |
 | `dym auth login` | Prompt for a token and save it to the OS keychain |
 | `dym auth logout` | Remove the saved token from the OS keychain |
-| `dym auth status` | Show which credential source (keychain or `DYMMER_TOKEN`) will be used |
+| `dym auth status` | Show which credential source (keychain or `DYMMER_TOKEN`) will be used, and the token's scopes/restrictions |
 | `dym auth token-help` | Print instructions for obtaining a token |
 
 ### `dym domain <domain> records`

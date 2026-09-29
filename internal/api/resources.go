@@ -179,6 +179,30 @@ type SecretsResult struct {
 	Entries []SecretEntry
 }
 
+// AuthStatus describes what the current token is allowed to do (backlog
+// dymmer#263): Unrestricted is true for a legacy full-access token or one
+// explicitly granted the "*" scope; Scopes and Constraints are only
+// meaningful when Unrestricted is false.
+type AuthStatus struct {
+	Unrestricted bool              `json:"unrestricted"`
+	Scopes       []string          `json:"scopes"`
+	Constraints  map[string]string `json:"constraints"`
+}
+
+// GetAuthStatus asks the server what the current token's own scopes and
+// resource constraints are (GET /auth/status). Any authenticated token can
+// call this, regardless of its own scopes.
+func (c *Client) GetAuthStatus(ctx context.Context) (*AuthStatus, error) {
+	var resp struct {
+		Status string `json:"status"`
+		AuthStatus
+	}
+	if err := c.do(ctx, http.MethodGet, "/auth/status", nil, &resp); err != nil {
+		return nil, err
+	}
+	return &resp.AuthStatus, nil
+}
+
 // GetSecrets fetches secrets for project (required), env, and optionally
 // deployment (omitted from the request entirely when empty).
 //
