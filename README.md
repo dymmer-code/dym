@@ -199,6 +199,10 @@ Inside `url`, `token`, and `request_template`, templates render against:
 
 so `{"domains":["a.com"]}` is addressed as `{{range .Body.domains}}{{.}}\n{{end}}`, not bare `{{range .domains}}`. Splitting `Body` out from the top level like this is what lets a response template combine response data with request-time params the server itself never echoes back — see the worked examples below.
 
+Template functions available in `request_template` and `response`:
+- `toJson`: marshals data as a compact JSON string (e.g. `{{.Body | toJson}}` or `{{.Args | toJson}}`).
+- `toPrettyJson`: marshals data as formatted, two-space indented JSON (e.g. `{{.Body | toPrettyJson}}`).
+
 When `response` is omitted, the decoded response array becomes rows for `--filter`/`--select`/`--output table|json|csv|tsv`, same as `records list`/`mailboxes list`/etc.: object elements become rows as-is; scalar elements (a plain array of strings, say) are wrapped as `{"value": <elem>}`. With no `--select`, the default columns are the sorted union of every row's keys.
 
 ### Worked examples

@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1353,3 +1354,97 @@ extensions:
 		t.Fatalf("unexpected message for the no-path case: %v", err)
 	}
 }
+
+func TestExtResponseTemplate_ToJsonAndToPrettyJson(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"ok","sites":[{"host":"api.altenwald.org","uris":[{"target":"http://127.0.0.1:8080","tls":"required","type":"proxy","uri":"/"}]}]}`))
+	}))
+	defer srv.Close()
+
+	path := writeExtensionsYAML(t, `
+extensions:
+  sites-json:
+    url: "{{.BaseURL}}/internal/v1/web_servers/uris"
+    auth: none
+    response:
+      - template: "{{.Body | toJson}}\n"
+
+  sites-pretty:
+    url: "{{.BaseURL}}/internal/v1/web_servers/uris"
+    auth: none
+    response:
+      - template: "{{.Body | toPrettyJson}}\n"
+`)
+
+	// Test toJson
+	out1 := new(bytes.Buffer)
+	cmd1 := NewRootCommand(Dependencies{Out: out1, Err: new(bytes.Buffer), BaseURL: srv.URL, ExtensionsFile: path})
+	cmd1.SetArgs([]string{"ext", "sites-json"})
+	if err := cmd1.Execute(); err != nil {
+		t.Fatalf("sites-json failed: %v", err)
+	}
+
+	var parsed1 map[string]any
+	if err := json.Unmarshal(out1.Bytes(), &parsed1); err != nil {
+		t.Fatalf("sites-json output is not valid json: %v\nOutput: %s", err, out1.String())
+	}
+	if parsed1["status"] != "ok" {
+		t.Fatalf("expected status ok, got %v", parsed1["status"])
+	}
+
+	// Test toPrettyJson
+	out2 := new(bytes.Buffer)
+	cmd2 := NewRootCommand(Dependencies{Out: out2, Err: new(bytes.Buffer), BaseURL: srv.URL, ExtensionsFile: path})
+	cmd2.SetArgs([]string{"ext", "sites-pretty"})
+	if err := cmd2.Execute(); err != nil {
+		t.Fatalf("sites-pretty failed: %v", err)
+	}
+
+	var parsed2 map[string]any
+	if err := json.Unmarshal(out2.Bytes(), &parsed2); err != nil {
+		t.Fatalf("sites-pretty output is not valid json: %v\nOutput: %s", err, out2.String())
+	}
+	if !strings.Contains(out2.String(), "  \"status\": \"ok\"") {
+		t.Fatalf("expected pretty indented json, got: %s", out2.String())
+	}
+}
+
+func TestExtRequestTemplate_ToJson(t *testing.T) {
+	var receivedBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		receivedBody = string(body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer srv.Close()
+
+	path := writeExtensionsYAML(t, `
+extensions:
+  send-json:
+    url: "{{.BaseURL}}/post"
+    method: POST
+    auth: none
+    params: ["name", "role"]
+    request_template: '{{.Args | toJson}}'
+    response:
+      - template: "{{.Body.status}}\n"
+`)
+
+	out := new(bytes.Buffer)
+	cmd := NewRootCommand(Dependencies{Out: out, Err: new(bytes.Buffer), BaseURL: srv.URL, ExtensionsFile: path})
+	cmd.SetArgs([]string{"ext", "send-json", "manuel", "admin"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("send-json failed: %v", err)
+	}
+
+	var parsed map[string]string
+	if err := json.Unmarshal([]byte(receivedBody), &parsed); err != nil {
+		t.Fatalf("received body is not valid json: %v\nBody: %s", err, receivedBody)
+	}
+	if parsed["name"] != "manuel" || parsed["role"] != "admin" {
+		t.Fatalf("unexpected request body: %v", parsed)
+	}
+}
+

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -188,6 +189,19 @@ var reservedExtensionNames = map[string]bool{
 	"completion": true,
 }
 
+// extensionTemplateFuncs provides helper functions available within extension templates
+// (e.g. {{ .Body | toJson }} or {{ .Body | toPrettyJson }}).
+var extensionTemplateFuncs = template.FuncMap{
+	"toJson": func(v any) (string, error) {
+		b, err := json.Marshal(v)
+		return string(b), err
+	},
+	"toPrettyJson": func(v any) (string, error) {
+		b, err := json.MarshalIndent(v, "", "  ")
+		return string(b), err
+	},
+}
+
 // buildExtension validates and normalizes a single raw extension definition,
 // parsing every template field so a syntax error is caught at load time.
 func buildExtension(name string, raw rawExtension) (*extension, error) {
@@ -257,7 +271,7 @@ func buildExtension(name string, raw rawExtension) (*extension, error) {
 
 	var requestTmpl *template.Template
 	if raw.RequestTemplate != "" {
-		requestTmpl, err = template.New(name + ":request").Option("missingkey=error").Parse(raw.RequestTemplate)
+		requestTmpl, err = template.New(name + ":request").Funcs(extensionTemplateFuncs).Option("missingkey=error").Parse(raw.RequestTemplate)
 		if err != nil {
 			return nil, fmt.Errorf("invalid request_template: %w", err)
 		}
@@ -273,7 +287,7 @@ func buildExtension(name string, raw rawExtension) (*extension, error) {
 			if strings.TrimSpace(r.Template) == "" {
 				return nil, fmt.Errorf("response[%d]: template is required", i)
 			}
-			tmpl, err := template.New(fmt.Sprintf("%s:response:%d", name, i)).Parse(r.Template)
+			tmpl, err := template.New(fmt.Sprintf("%s:response:%d", name, i)).Funcs(extensionTemplateFuncs).Parse(r.Template)
 			if err != nil {
 				return nil, fmt.Errorf("invalid response template [%d]: %w", i, err)
 			}
