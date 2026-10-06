@@ -88,15 +88,18 @@ func TestContentStringSortedDirectly(t *testing.T) {
 
 func TestWriteMailboxesTableNormalRows(t *testing.T) {
 	out := new(bytes.Buffer)
-	mailboxes := []api.Mailbox{{Username: "alice", Enabled: true, PasswordMD5: "abc123"}}
+	mailboxes := []api.Mailbox{{Username: "alice", Enabled: true}}
 	if err := writeMailboxesTable(out, mailboxes); err != nil {
 		t.Fatal(err)
 	}
 	got := out.String()
-	if !strings.Contains(got, "USERNAME") || !strings.Contains(got, "ENABLED") || !strings.Contains(got, "PASSWORD_MD5") {
+	if !strings.Contains(got, "USERNAME") || !strings.Contains(got, "ENABLED") {
 		t.Fatalf("missing expected column headers: %q", got)
 	}
-	if !strings.Contains(got, "alice") || !strings.Contains(got, "true") || !strings.Contains(got, "abc123") {
+	if strings.Contains(got, "PASSWORD") {
+		t.Fatalf("mailboxes table must not show any password column: %q", got)
+	}
+	if !strings.Contains(got, "alice") || !strings.Contains(got, "true") {
 		t.Fatalf("missing expected row content: %q", got)
 	}
 }

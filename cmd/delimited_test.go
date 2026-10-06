@@ -68,12 +68,12 @@ func TestWriteRecordsCSVQuotesValuesContainingComma(t *testing.T) {
 }
 
 func TestWriteMailboxesCSVNormalOutput(t *testing.T) {
-	mailboxes := []api.Mailbox{{Username: "alice", Enabled: true, PasswordMD5: "abc123"}}
+	mailboxes := []api.Mailbox{{Username: "alice", Enabled: true}}
 	var buf bytes.Buffer
 	if err := writeMailboxesCSV(&buf, mailboxes, ','); err != nil {
 		t.Fatal(err)
 	}
-	want := "alice,true,abc123\n"
+	want := "alice,true\n"
 	if buf.String() != want {
 		t.Fatalf("got %q, want %q", buf.String(), want)
 	}

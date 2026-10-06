@@ -117,7 +117,7 @@ Every command that prints API results defaults to a human-readable table on stdo
 Field names are the API's real JSON field names, not always the same as the CLI's create/update flag names. Notably: a DNS record's TTL flag is `--ttl` but its field name is `time_to_live`; a record's type-specific data (IP address, alias target, etc.) lives under `content`, accessed with a dot, e.g. `content.ip`, `content.value`, `content.mail_provider` (same key names used for the `--ip`/`--value`/`--mail-provider` flags). The full field sets:
 
 - `records`: `id`, `type`, `host`, `time_to_live`, `content.<key>`
-- `mailboxes`: `username`, `enabled`, `password_md5`
+- `mailboxes`: `username`, `enabled` (password hashes are not exposed here; mail servers read them from `/api/v1/zones/<domain>/identities` with a token scoped `identity:read`)
 - `forwardings`: `username`, `enabled`, `destination`
 - `secrets get`: `key`, `value`, `comments`, `removed`
 
@@ -241,17 +241,17 @@ extensions:
 dym ext create-dkim-txt example.com "v=DKIM1; k=rsa; p=..."
 ```
 
-**`response` template combining `Args` and `Body`** — a custom line format for an endpoint `dym` already has a native command for (`dym domain <domain> mailboxes list`), where the domain name itself only ever exists on the request side:
+**`response` template combining `Args` and `Body`** — a custom line format (a Dovecot passwd-file) where the domain name itself only ever exists on the request side. It reads the mail identities endpoint, which needs a token with the `identity:read` scope:
 
 ```yaml
 extensions:
   mailbox-passwd-lines:
-    url: "{{.BaseURL}}/api/v1/zones/{{.Args.domain}}/mailboxes"
+    url: "{{.BaseURL}}/api/v1/zones/{{.Args.domain}}/identities"
     auth: bearer
     params: [domain]
     response:
       - template: |-
-          {{$domain := .Args.domain}}{{range .Body.mailboxes}}{{if .enabled}}{{.username}}@{{$domain}}:{{.password_md5}}::::/mail/{{$domain}}/{{.username}}::
+          {{$domain := .Args.domain}}{{range .Body.identities}}{{if and .enabled .password_hash}}{{.username}}@{{$domain}}:{{.password_hash}}::::/mail/{{$domain}}/{{.username}}::
           {{end}}{{end}}
 ```
 

@@ -113,12 +113,12 @@ func (c *Client) DeleteRecord(ctx context.Context, domain, id string) (*Record, 
 	return &resp.Record, nil
 }
 
-// Mailbox is a single mailbox as returned by the Dymmer API. PasswordMD5 is
-// an opaque hash, not a plaintext credential.
+// Mailbox is a single mailbox as returned by the Dymmer API. The API no
+// longer exposes password hashes here; mail servers read credentials from
+// /zones/<domain>/identities (scope identity:read).
 type Mailbox struct {
-	Username    string `json:"username"`
-	PasswordMD5 string `json:"password_md5"`
-	Enabled     bool   `json:"enabled"`
+	Username string `json:"username"`
+	Enabled  bool   `json:"enabled"`
 }
 
 // ListMailboxes fetches the mailboxes configured for domain.

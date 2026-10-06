@@ -53,7 +53,7 @@ func writeRecordsTable(w io.Writer, records []api.Record) error {
 }
 
 // writeMailboxesTable renders mailboxes as a human-readable table with
-// columns USERNAME, ENABLED, PASSWORD_MD5. An empty slice prints
+// columns USERNAME, ENABLED. An empty slice prints
 // "No mailboxes found." instead of a header-only table.
 func writeMailboxesTable(w io.Writer, mailboxes []api.Mailbox) error {
 	if len(mailboxes) == 0 {
@@ -61,9 +61,9 @@ func writeMailboxesTable(w io.Writer, mailboxes []api.Mailbox) error {
 		return err
 	}
 	tw := newTabWriter(w)
-	fmt.Fprintln(tw, "USERNAME\tENABLED\tPASSWORD_MD5")
+	fmt.Fprintln(tw, "USERNAME\tENABLED")
 	for _, m := range mailboxes {
-		fmt.Fprintf(tw, "%s\t%t\t%s\n", m.Username, m.Enabled, m.PasswordMD5)
+		fmt.Fprintf(tw, "%s\t%t\n", m.Username, m.Enabled)
 	}
 	return tw.Flush()
 }

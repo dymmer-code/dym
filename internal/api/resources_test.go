@@ -137,7 +137,7 @@ func TestListMailboxes(t *testing.T) {
 		if r.URL.Path != "/zones/example.com/mailboxes" {
 			t.Fatal(r.URL.Path)
 		}
-		io.WriteString(w, `{"status":"ok","mailboxes":[{"username":"alice","password_md5":"5f4dcc3b5aa765d61d8327deb882cf99","enabled":true}]}`)
+		io.WriteString(w, `{"status":"ok","mailboxes":[{"username":"alice","enabled":true}]}`)
 	}))
 	defer s.Close()
 
@@ -145,7 +145,7 @@ func TestListMailboxes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(boxes) != 1 || boxes[0].Username != "alice" || boxes[0].PasswordMD5 != "5f4dcc3b5aa765d61d8327deb882cf99" || !boxes[0].Enabled {
+	if len(boxes) != 1 || boxes[0].Username != "alice" || !boxes[0].Enabled {
 		t.Fatalf("unexpected mailboxes: %+v", boxes)
 	}
 }

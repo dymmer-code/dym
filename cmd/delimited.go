@@ -46,12 +46,12 @@ func writeRecordsCSV(w io.Writer, records []api.Record, comma rune) error {
 }
 
 // writeMailboxesCSV renders mailboxes with the same columns as
-// writeMailboxesTable (USERNAME, ENABLED, PASSWORD_MD5), but with no header
+// writeMailboxesTable (USERNAME, ENABLED), but with no header
 // row and no "No mailboxes found." message on an empty slice.
 func writeMailboxesCSV(w io.Writer, mailboxes []api.Mailbox, comma rune) error {
 	rows := make([][]string, 0, len(mailboxes))
 	for _, m := range mailboxes {
-		rows = append(rows, []string{m.Username, fmt.Sprintf("%t", m.Enabled), m.PasswordMD5})
+		rows = append(rows, []string{m.Username, fmt.Sprintf("%t", m.Enabled)})
 	}
 	return writeDelimitedRows(w, rows, comma)
 }

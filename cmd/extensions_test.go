@@ -597,19 +597,19 @@ func TestExtResponseTemplateCombinesArgsAndBody(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		// Deliberately has no "domain" field anywhere: the server never
 		// echoes back a value that was only ever in the URL/params.
-		_, _ = w.Write([]byte(`{"mailboxes":[{"username":"alice","enabled":true,"password_md5":"abc123"},{"username":"bob","enabled":false,"password_md5":"def456"}]}`))
+		_, _ = w.Write([]byte(`{"identities":[{"username":"alice","enabled":true,"password_hash":"abc123"},{"username":"bob","enabled":false,"password_hash":"def456"}]}`))
 	}))
 	defer srv.Close()
 
 	path := writeExtensionsYAML(t, `
 extensions:
   mailbox-passwd-lines:
-    url: "{{.BaseURL}}/api/v1/zones/{{.Args.domain}}/mailboxes"
+    url: "{{.BaseURL}}/api/v1/zones/{{.Args.domain}}/identities"
     auth: none
     params: [domain]
     response:
       - template: |-
-          {{$domain := .Args.domain}}{{range .Body.mailboxes}}{{if .enabled}}{{.username}}@{{$domain}}:{{.password_md5}}{{"\n"}}{{end}}{{end}}
+          {{$domain := .Args.domain}}{{range .Body.identities}}{{if and .enabled .password_hash}}{{.username}}@{{$domain}}:{{.password_hash}}{{"\n"}}{{end}}{{end}}
 `)
 
 	out := new(bytes.Buffer)
