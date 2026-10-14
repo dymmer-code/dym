@@ -47,6 +47,75 @@ type fakeAPI struct {
 
 	authStatus    *api.AuthStatus
 	authStatusErr error
+
+	// the web configuration (cmd/web_test.go)
+	webSitesSeq []([]api.WebSite) // each call of ListWebSites answers the next one; the last one repeats
+	webSitesErr error
+	webServers  []api.WebServer
+	webResult   *api.WebResult
+	webErr      error
+
+	webCalls      []string
+	lastWebZone   string
+	lastWebServer string
+	lastWebHost   string
+	lastWebID     string
+	lastWebFields map[string]string
+	lastWebDryRun bool
+}
+
+func (f *fakeAPI) ListWebSites(_ context.Context, zone, server, host string) ([]api.WebSite, error) {
+	f.webCalls = append(f.webCalls, "list")
+	f.lastWebZone, f.lastWebServer, f.lastWebHost = zone, server, host
+	if f.webSitesErr != nil {
+		return nil, f.webSitesErr
+	}
+	if len(f.webSitesSeq) == 0 {
+		return nil, nil
+	}
+	sites := f.webSitesSeq[0]
+	if len(f.webSitesSeq) > 1 {
+		f.webSitesSeq = f.webSitesSeq[1:]
+	}
+	return sites, nil
+}
+
+func (f *fakeAPI) webAnswer(call, zone, server, id string, fields map[string]string, dryRun bool) (*api.WebResult, error) {
+	f.webCalls = append(f.webCalls, call)
+	f.lastWebZone, f.lastWebServer, f.lastWebID, f.lastWebFields, f.lastWebDryRun = zone, server, id, fields, dryRun
+	if f.webErr != nil {
+		return nil, f.webErr
+	}
+	if f.webResult != nil {
+		result := *f.webResult
+		result.DryRun = dryRun
+		return &result, nil
+	}
+	return &api.WebResult{Status: "ok", URI: api.WebURI{ID: "u1", URI: "/", Type: "proxy", Target: "http://192.168.1.57:4016", TLS: "required", State: "pending"}, DryRun: dryRun}, nil
+}
+
+func (f *fakeAPI) CreateWebURI(_ context.Context, zone, server string, fields map[string]string, dryRun bool) (*api.WebResult, error) {
+	return f.webAnswer("create", zone, server, "", fields, dryRun)
+}
+
+func (f *fakeAPI) UpdateWebURI(_ context.Context, zone, server, id string, fields map[string]string, dryRun bool) (*api.WebResult, error) {
+	return f.webAnswer("update", zone, server, id, fields, dryRun)
+}
+
+func (f *fakeAPI) DeleteWebURI(_ context.Context, zone, server, id string, dryRun bool) (*api.WebResult, error) {
+	return f.webAnswer("delete", zone, server, id, nil, dryRun)
+}
+
+func (f *fakeAPI) RestoreWebURI(_ context.Context, zone, server, id string) (*api.WebResult, error) {
+	return f.webAnswer("restore", zone, server, id, nil, false)
+}
+
+func (f *fakeAPI) ListWebServers(_ context.Context) ([]api.WebServer, error) {
+	f.webCalls = append(f.webCalls, "servers")
+	if f.webErr != nil {
+		return nil, f.webErr
+	}
+	return f.webServers, nil
 }
 
 func (f *fakeAPI) ListRecords(_ context.Context, domain, recordType string) ([]api.Record, error) {

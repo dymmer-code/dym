@@ -25,6 +25,12 @@ type APIClient interface {
 	ListForwardings(ctx context.Context, domain string) ([]api.Forwarding, error)
 	GetSecrets(ctx context.Context, project, env, deployment, format string) (*api.SecretsResult, error)
 	GetAuthStatus(ctx context.Context) (*api.AuthStatus, error)
+	ListWebSites(ctx context.Context, zone, server, host string) ([]api.WebSite, error)
+	CreateWebURI(ctx context.Context, zone, server string, fields map[string]string, dryRun bool) (*api.WebResult, error)
+	UpdateWebURI(ctx context.Context, zone, server, id string, fields map[string]string, dryRun bool) (*api.WebResult, error)
+	DeleteWebURI(ctx context.Context, zone, server, id string, dryRun bool) (*api.WebResult, error)
+	RestoreWebURI(ctx context.Context, zone, server, id string) (*api.WebResult, error)
+	ListWebServers(ctx context.Context) ([]api.WebServer, error)
 }
 
 const defaultBaseURL = "https://dymmer.com/api/v1"
@@ -74,7 +80,7 @@ func wrapAuthError(err error) error {
 func newDomainCommand(deps Dependencies) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:                "domain <domain> <resource> <verb> [args]",
-		Short:              "Manage DNS records, mailboxes, and forwardings for a domain",
+		Short:              "Manage DNS records, mailboxes, forwardings, and web configuration for a domain",
 		DisableFlagParsing: true,
 		Args:               cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -104,6 +110,7 @@ func newDomainResourceTree(domain string, deps Dependencies) *cobra.Command {
 	root.AddCommand(newRecordsCommand(domain, deps))
 	root.AddCommand(newMailboxesCommand(domain, deps))
 	root.AddCommand(newForwardingsCommand(domain, deps))
+	root.AddCommand(newDomainWebCommand(domain, deps))
 	return root
 }
 
