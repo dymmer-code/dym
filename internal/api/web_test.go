@@ -179,3 +179,19 @@ func TestSetWebOptionsSendsNilToTakeAnOptionAway(t *testing.T) {
 		t.Fatalf("%+v %v", got, err)
 	}
 }
+
+func TestTheCodeOfARedirectGoesAsANumber(t *testing.T) {
+	s := webServer(t, func(r *http.Request, body map[string]any) {
+		web := body["web"].(map[string]any)
+		if web["redirect_status"] != float64(308) || web["type"] != "redirect" {
+			t.Fatalf("web = %v (%T)", web, web["redirect_status"])
+		}
+	}, `{"status":"ok","uri":{"id":"r1","uri":"/","type":"redirect","target":"https://x.example.org","tls":"required","redirect_status":308,"state":"pending"},"warnings":[],"dry_run":false}`, 0)
+	defer s.Close()
+
+	got, err := NewClient(s.URL, "tok", s.Client()).CreateWebURI(context.Background(), "example.org", "", map[string]string{
+		"type": "redirect", "target": "https://x.example.org", "redirect_status": "308"}, false)
+	if err != nil || got.URI.RedirectStatus != 308 {
+		t.Fatalf("%+v %v", got, err)
+	}
+}

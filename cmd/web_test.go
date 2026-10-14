@@ -330,3 +330,43 @@ func TestWebOptionsShowsTheReasonOfARefusal(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestWebAddARedirectSendsItsCode(t *testing.T) {
+	fake := &fakeAPI{}
+	_, _, err := runWeb(t, fake, "domain", "altenwald.com", "web", "add", "old", "--type", "redirect", "--target", "https://new.example.org", "--status", "308")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := fake.lastWebFields
+	if f["type"] != "redirect" || f["redirect_status"] != "308" || f["target"] != "https://new.example.org" {
+		t.Fatalf("fields = %v", f)
+	}
+}
+
+func TestWebStatusOnlyAcceptsTheFourCodes(t *testing.T) {
+	for _, code := range []string{"200", "303", "0", "-1"} {
+		_, _, err := runWeb(t, &fakeAPI{}, "domain", "altenwald.com", "web", "add", "old", "--type", "redirect", "--target", "https://x.example.org", "--status", code)
+		if err == nil || !strings.Contains(err.Error(), "301, 302, 307 or 308") {
+			t.Fatalf("status %s: err = %v", code, err)
+		}
+	}
+}
+
+func TestWebUpdateCanChangeOnlyTheCode(t *testing.T) {
+	fake := &fakeAPI{}
+	if _, _, err := runWeb(t, fake, "domain", "altenwald.com", "web", "update", "u1", "--status", "301"); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.lastWebFields) != 1 || fake.lastWebFields["redirect_status"] != "301" {
+		t.Fatalf("fields = %v", fake.lastWebFields)
+	}
+}
+
+func TestWebListShowsTheCodeNextToTheType(t *testing.T) {
+	redirect := api.WebURI{ID: "r1", URI: "/", Type: "redirect", Target: "https://new.example.org", TLS: "required", State: "applied", RedirectStatus: 301}
+	fake := &fakeAPI{webSitesSeq: [][]api.WebSite{{site("old.altenwald.com", redirect)}}}
+	out, _, err := runWeb(t, fake, "domain", "altenwald.com", "web", "list")
+	if err != nil || !strings.Contains(out, "redirect 301") {
+		t.Fatalf("%v %q", err, out)
+	}
+}

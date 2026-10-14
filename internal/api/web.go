@@ -4,21 +4,24 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+	"strconv"
 )
 
 // WebURI is one URI of a name and where it stands for its web server: State is "pending" (the server has not applied
 // this version yet), "applied" or "errored", and ErrorReason says why the server refused it.
 type WebURI struct {
-	ID          string `json:"id"`
-	URI         string `json:"uri"`
-	Type        string `json:"type"`
-	Target      string `json:"target"`
-	TLS         string `json:"tls"`
-	State       string `json:"state"`
-	ErrorReason string `json:"error_reason"`
-	AppliedAt   string `json:"applied_at"`
-	ErroredAt   string `json:"errored_at"`
-	UpdatedAt   string `json:"updated_at"`
+	ID     string `json:"id"`
+	URI    string `json:"uri"`
+	Type   string `json:"type"`
+	Target string `json:"target"`
+	TLS    string `json:"tls"`
+	// RedirectStatus is the code of a redirect (301, 302, 307 or 308); 0 for the other types.
+	RedirectStatus int    `json:"redirect_status"`
+	State          string `json:"state"`
+	ErrorReason    string `json:"error_reason"`
+	AppliedAt      string `json:"applied_at"`
+	ErroredAt      string `json:"errored_at"`
+	UpdatedAt      string `json:"updated_at"`
 }
 
 // WebSite is a name with its URIs.
@@ -70,7 +73,17 @@ func (c *Client) ListWebSites(ctx context.Context, zone, server, host string) ([
 }
 
 func webBody(fields map[string]string, dryRun bool) map[string]any {
-	body := map[string]any{"web": fields}
+	web := make(map[string]any, len(fields))
+	for key, value := range fields {
+		web[key] = value
+	}
+	// the code of a redirect is a number for the API
+	if code, ok := fields["redirect_status"]; ok {
+		if n, err := strconv.Atoi(code); err == nil {
+			web["redirect_status"] = n
+		}
+	}
+	body := map[string]any{"web": web}
 	if dryRun {
 		body["dry_run"] = true
 	}

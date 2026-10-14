@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/dymmer-code/dym/internal/api"
@@ -84,13 +85,17 @@ func addWebWaitFlags(cmd *cobra.Command, f *webFlags) {
 // webContentFlags are the ones that say what a URI serves.
 type webContentFlags struct {
 	uri, kind, target, tls string
+	status                 int
 	noSSL                  bool
 }
 
+var webRedirectStatuses = map[int]bool{301: true, 302: true, 307: true, 308: true}
+
 func addWebContentFlags(cmd *cobra.Command, f *webContentFlags) {
 	cmd.Flags().StringVar(&f.uri, "uri", "", "The path to serve (default /)")
-	cmd.Flags().StringVar(&f.kind, "type", "", "proxy (default) or static")
-	cmd.Flags().StringVar(&f.target, "target", "", "For a proxy http://host[:port] of a connected host of yours; for static garage://bucket/prefix/")
+	cmd.Flags().StringVar(&f.kind, "type", "", "proxy (default), static or redirect")
+	cmd.Flags().StringVar(&f.target, "target", "", "For a proxy http://host[:port] of a connected host of yours; for static garage://bucket/prefix/; for a redirect https://host[/path] (the path and query of the request are kept)")
+	cmd.Flags().IntVar(&f.status, "status", 0, "For a redirect: 301 (permanent), 302 (temporary, the default), 307 (temporary, keeps the method) or 308 (permanent, keeps the method)")
 	cmd.Flags().StringVar(&f.tls, "tls", "", "required (default: HTTP redirects to HTTPS), enabled (both) or disabled (HTTP only)")
 	cmd.Flags().BoolVar(&f.noSSL, "no-ssl", false, "The same as --tls disabled")
 }
@@ -106,6 +111,12 @@ func (f *webContentFlags) fields(cmd *cobra.Command) (map[string]string, error) 
 	set("uri", "uri", f.uri)
 	set("type", "type", f.kind)
 	set("target", "target", f.target)
+	if cmd.Flags().Changed("status") {
+		if !webRedirectStatuses[f.status] {
+			return nil, errors.New("--status must be 301, 302, 307 or 308")
+		}
+		fields["redirect_status"] = strconv.Itoa(f.status)
+	}
 	if f.noSSL && cmd.Flags().Changed("tls") {
 		return nil, errors.New("--no-ssl and --tls say the same thing: use only one")
 	}
@@ -379,7 +390,7 @@ func writeWebURIsTable(w io.Writer, uris []api.WebURI) error {
 	tw := newTabWriter(w)
 	fmt.Fprintln(tw, "ID\tURI\tTYPE\tTARGET\tTLS\tSTATE\tREASON")
 	for _, u := range uris {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", u.ID, u.URI, u.Type, u.Target, u.TLS, u.State, webReason(u))
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", u.ID, u.URI, webKind(u), u.Target, u.TLS, u.State, webReason(u))
 	}
 	return tw.Flush()
 }
@@ -393,7 +404,7 @@ func writeWebSitesTable(w io.Writer, sites []api.WebSite) error {
 	fmt.Fprintln(tw, "HOST\tURI\tTYPE\tTARGET\tTLS\tSTATE\tREASON\tID")
 	for _, site := range sites {
 		for _, u := range site.URIs {
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", site.Host, u.URI, u.Type, u.Target, u.TLS, u.State, webReason(u), u.ID)
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", site.Host, u.URI, webKind(u), u.Target, u.TLS, u.State, webReason(u), u.ID)
 		}
 	}
 	return tw.Flush()
@@ -493,4 +504,12 @@ func writeWebOptionsTable(w io.Writer, result *api.WebOptions) error {
 		fmt.Fprintf(tw, "%s\t%s\t%v\n", result.Host, key, result.Options[key])
 	}
 	return tw.Flush()
+}
+
+// webKind is the type, with the code of a redirect next to it (redirect 301).
+func webKind(u api.WebURI) string {
+	if u.Type == "redirect" && u.RedirectStatus != 0 {
+		return fmt.Sprintf("redirect %d", u.RedirectStatus)
+	}
+	return u.Type
 }
