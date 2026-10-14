@@ -266,3 +266,67 @@ func TestWebErrorsKeepTheLoginHint(t *testing.T) {
 		t.Fatal("the API error should stay in the chain")
 	}
 }
+
+func TestWebOptionsWithoutFlagsShowsThem(t *testing.T) {
+	fake := &fakeAPI{webOptions: &api.WebOptions{Status: "ok", Host: "games.altenwald.com", Options: map[string]any{"blog_fallback": true, "asset_extensions": "jpg|css"}}}
+	out, _, err := runWeb(t, fake, "domain", "altenwald.com", "web", "options", "games")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.webCalls) != 1 || fake.webCalls[0] != "options-get" || fake.lastWebHost != "games" {
+		t.Fatalf("calls %v host %q", fake.webCalls, fake.lastWebHost)
+	}
+	for _, want := range []string{"blog_fallback", "true", "asset_extensions", "jpg|css"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q in %q", want, out)
+		}
+	}
+}
+
+func TestWebOptionsWithNoneSaysSo(t *testing.T) {
+	out, _, err := runWeb(t, &fakeAPI{}, "domain", "altenwald.com", "web", "options")
+	if err != nil || !strings.Contains(out, "has no options") {
+		t.Fatalf("%v %q", err, out)
+	}
+}
+
+func TestWebOptionsSendsOnlyTheOnesGivenAndFalseTakesThemAway(t *testing.T) {
+	fake := &fakeAPI{}
+	_, _, err := runWeb(t, fake, "domain", "altenwald.com", "web", "options", "games", "--hsts", "--blog-fallback=false", "--asset-extensions", "jpg|css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := fake.lastWebOpts
+	if len(got) != 3 || got["hsts"] != true || got["blog_fallback"] != nil || got["asset_extensions"] != "jpg|css" {
+		t.Fatalf("options = %v", got)
+	}
+	if _, present := got["blog_fallback"]; !present {
+		t.Fatalf("a nil must be sent to take the option away: %v", got)
+	}
+}
+
+func TestWebOptionsEmptyExtensionsTakesThemAway(t *testing.T) {
+	fake := &fakeAPI{}
+	if _, _, err := runWeb(t, fake, "domain", "altenwald.com", "web", "options", "--asset-extensions", ""); err != nil {
+		t.Fatal(err)
+	}
+	if v, present := fake.lastWebOpts["asset_extensions"]; !present || v != nil {
+		t.Fatalf("options = %v", fake.lastWebOpts)
+	}
+}
+
+func TestWebOptionsDryRunSaysSo(t *testing.T) {
+	fake := &fakeAPI{}
+	out, _, err := runWeb(t, fake, "domain", "altenwald.com", "web", "options", "--hsts", "--dry-run")
+	if err != nil || !fake.lastWebDryRun || !strings.Contains(out, "Dry run") {
+		t.Fatalf("%v %v %q", err, fake.lastWebDryRun, out)
+	}
+}
+
+func TestWebOptionsShowsTheReasonOfARefusal(t *testing.T) {
+	fake := &fakeAPI{webErr: errors.New("dymmer api: validation (status 400) [hsts: needs every URI of the name with tls required]")}
+	_, _, err := runWeb(t, fake, "domain", "altenwald.com", "web", "options", "--hsts")
+	if err == nil || !strings.Contains(err.Error(), "needs every URI") {
+		t.Fatalf("err = %v", err)
+	}
+}

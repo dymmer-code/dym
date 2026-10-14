@@ -55,6 +55,8 @@ type fakeAPI struct {
 	webResult   *api.WebResult
 	webErr      error
 
+	webOptions    *api.WebOptions
+	lastWebOpts   map[string]any
 	webCalls      []string
 	lastWebZone   string
 	lastWebServer string
@@ -914,4 +916,25 @@ func TestRecordsListInvalidOutputErrorMentionsCSVAndTSV(t *testing.T) {
 	if !strings.Contains(err.Error(), "csv") || !strings.Contains(err.Error(), "tsv") {
 		t.Fatalf("error = %q, want it to mention csv and tsv", err.Error())
 	}
+}
+
+func (f *fakeAPI) GetWebOptions(_ context.Context, zone, server, host string) (*api.WebOptions, error) {
+	f.webCalls = append(f.webCalls, "options-get")
+	f.lastWebZone, f.lastWebServer, f.lastWebHost = zone, server, host
+	if f.webErr != nil {
+		return nil, f.webErr
+	}
+	if f.webOptions != nil {
+		return f.webOptions, nil
+	}
+	return &api.WebOptions{Status: "ok", Host: zone, Options: map[string]any{}}, nil
+}
+
+func (f *fakeAPI) SetWebOptions(_ context.Context, zone, server, host string, options map[string]any, dryRun bool) (*api.WebOptions, error) {
+	f.webCalls = append(f.webCalls, "options-set")
+	f.lastWebZone, f.lastWebServer, f.lastWebHost, f.lastWebOpts, f.lastWebDryRun = zone, server, host, options, dryRun
+	if f.webErr != nil {
+		return nil, f.webErr
+	}
+	return &api.WebOptions{Status: "ok", Host: zone, Options: map[string]any{"hsts": true}, DryRun: dryRun}, nil
 }

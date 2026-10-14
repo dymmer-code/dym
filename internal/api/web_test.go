@@ -146,3 +146,36 @@ func TestAValidationErrorKeepsTheMessagesByField(t *testing.T) {
 		t.Fatalf("%v", err)
 	}
 }
+
+func TestGetWebOptionsReadsTheOptionsOfTheName(t *testing.T) {
+	s := webServer(t, func(r *http.Request, _ map[string]any) {
+		if r.Method != http.MethodGet || r.URL.Path != "/zones/example.org/web_servers/-/options/@" {
+			t.Fatalf("%s %s", r.Method, r.URL.Path)
+		}
+	}, `{"status":"ok","host":"example.org","options":{"hsts":true,"asset_extensions":"jpg|css"},"dry_run":false}`, 0)
+	defer s.Close()
+
+	got, err := NewClient(s.URL, "tok", s.Client()).GetWebOptions(context.Background(), "example.org", "", "")
+	if err != nil || got.Host != "example.org" || got.Options["hsts"] != true || got.Options["asset_extensions"] != "jpg|css" {
+		t.Fatalf("%+v %v", got, err)
+	}
+}
+
+func TestSetWebOptionsSendsNilToTakeAnOptionAway(t *testing.T) {
+	s := webServer(t, func(r *http.Request, body map[string]any) {
+		if r.Method != http.MethodPut || r.URL.Path != "/zones/example.org/web_servers/maple/options/games" {
+			t.Fatalf("%s %s", r.Method, r.URL.Path)
+		}
+		options := body["options"].(map[string]any)
+		if v, present := options["blog_fallback"]; !present || v != nil || options["hsts"] != true || body["dry_run"] != true {
+			t.Fatalf("body = %v", body)
+		}
+	}, `{"status":"ok","host":"games.example.org","options":{"hsts":true},"dry_run":true}`, 0)
+	defer s.Close()
+
+	got, err := NewClient(s.URL, "tok", s.Client()).SetWebOptions(context.Background(), "example.org", "maple", "games",
+		map[string]any{"hsts": true, "blog_fallback": nil}, true)
+	if err != nil || !got.DryRun {
+		t.Fatalf("%+v %v", got, err)
+	}
+}

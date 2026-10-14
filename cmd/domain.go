@@ -31,6 +31,8 @@ type APIClient interface {
 	DeleteWebURI(ctx context.Context, zone, server, id string, dryRun bool) (*api.WebResult, error)
 	RestoreWebURI(ctx context.Context, zone, server, id string) (*api.WebResult, error)
 	ListWebServers(ctx context.Context) ([]api.WebServer, error)
+	GetWebOptions(ctx context.Context, zone, server, host string) (*api.WebOptions, error)
+	SetWebOptions(ctx context.Context, zone, server, host string, options map[string]any, dryRun bool) (*api.WebOptions, error)
 }
 
 const defaultBaseURL = "https://dymmer.com/api/v1"

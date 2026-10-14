@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"time"
 
 	"github.com/dymmer-code/dym/internal/api"
@@ -133,6 +134,7 @@ func newDomainWebCommand(domain string, deps Dependencies) *cobra.Command {
 	cmd.AddCommand(newWebUpdateCommand(domain, deps))
 	cmd.AddCommand(newWebRemoveCommand(domain, deps))
 	cmd.AddCommand(newWebRestoreCommand(domain, deps))
+	cmd.AddCommand(newWebOptionsCommand(domain, deps))
 	return cmd
 }
 
@@ -403,4 +405,92 @@ func webReason(u api.WebURI) string {
 		return u.ErrorReason
 	}
 	return ""
+}
+
+func newWebOptionsCommand(domain string, deps Dependencies) *cobra.Command {
+	var wf webFlags
+	var hsts, blog, index bool
+	var extensions string
+	cmd := &cobra.Command{
+		Use:   "options [host]",
+		Short: "Show or change the options of a name (the apex when no host is given)",
+		Long: "Without options, shows the ones the name has. With them, changes only the ones given.\n" +
+			"  --hsts               tell the browsers to use HTTPS only (every URI of the name needs tls required)\n" +
+			"  --blog-fallback      what a static site does not have is answered with its /index.html\n" +
+			"  --index-fallback     the same, with no exception for the assets (not with --blog-fallback)\n" +
+			"  --asset-extensions   with --blog-fallback, extensions that stay a real 404, as jpg|png|css\n" +
+			"Use --hsts=false to take an option away; --asset-extensions \"\" does it for the extensions.",
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := checkWebOutput(wf.output); err != nil {
+				return err
+			}
+			host := ""
+			if len(args) == 1 {
+				host = args[0]
+			}
+			changes := map[string]any{}
+			for flag, key := range map[string]string{"hsts": "hsts", "blog-fallback": "blog_fallback", "index-fallback": "index_fallback"} {
+				if cmd.Flags().Changed(flag) {
+					value, _ := cmd.Flags().GetBool(flag)
+					if value {
+						changes[key] = true
+					} else {
+						changes[key] = nil
+					}
+				}
+			}
+			if cmd.Flags().Changed("asset-extensions") {
+				if extensions == "" {
+					changes["asset_extensions"] = nil
+				} else {
+					changes["asset_extensions"] = extensions
+				}
+			}
+			client, err := resolveAPI(deps)
+			if err != nil {
+				return err
+			}
+			var result *api.WebOptions
+			if len(changes) == 0 {
+				result, err = client.GetWebOptions(cmd.Context(), domain, wf.server, host)
+			} else {
+				result, err = client.SetWebOptions(cmd.Context(), domain, wf.server, host, changes, wf.dryRun)
+			}
+			if err != nil {
+				return wrapAuthError(err)
+			}
+			if wf.output == "json" {
+				return json.NewEncoder(cmd.OutOrStdout()).Encode(result)
+			}
+			if result.DryRun {
+				fmt.Fprintln(cmd.OutOrStdout(), "Dry run: it was checked, nothing was written.")
+			}
+			return writeWebOptionsTable(cmd.OutOrStdout(), result)
+		},
+	}
+	addWebFlags(cmd, &wf)
+	cmd.Flags().BoolVar(&hsts, "hsts", false, "Tell the browsers to use HTTPS only")
+	cmd.Flags().BoolVar(&blog, "blog-fallback", false, "Answer what a static site does not have with its /index.html")
+	cmd.Flags().BoolVar(&index, "index-fallback", false, "The same, with no exception for the assets")
+	cmd.Flags().StringVar(&extensions, "asset-extensions", "", "With --blog-fallback, extensions that stay a real 404 (jpg|png|css)")
+	return cmd
+}
+
+func writeWebOptionsTable(w io.Writer, result *api.WebOptions) error {
+	if len(result.Options) == 0 {
+		_, err := fmt.Fprintf(w, "%s has no options.\n", result.Host)
+		return err
+	}
+	keys := make([]string, 0, len(result.Options))
+	for key := range result.Options {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	tw := newTabWriter(w)
+	fmt.Fprintln(tw, "HOST\tOPTION\tVALUE")
+	for _, key := range keys {
+		fmt.Fprintf(tw, "%s\t%s\t%v\n", result.Host, key, result.Options[key])
+	}
+	return tw.Flush()
 }

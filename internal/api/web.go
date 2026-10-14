@@ -127,3 +127,44 @@ func (c *Client) ListWebServers(ctx context.Context) ([]WebServer, error) {
 	}
 	return resp.WebServers, nil
 }
+
+// WebOptions are the options of a whole name (not of one URI): hsts, blog_fallback, index_fallback (booleans) and
+// asset_extensions (a string like "jpg|css"). DryRun is true when it was only a check.
+type WebOptions struct {
+	Status  string         `json:"status"`
+	Host    string         `json:"host"`
+	Options map[string]any `json:"options"`
+	DryRun  bool           `json:"dry_run"`
+}
+
+func webOptionsPath(zone, server, host string) string {
+	if host == "" {
+		host = "@"
+	}
+	if server == "" {
+		server = AnyServer
+	}
+	return "/zones/" + url.PathEscape(zone) + "/web_servers/" + url.PathEscape(server) + "/options/" + url.PathEscape(host)
+}
+
+// GetWebOptions reads the options of a name.
+func (c *Client) GetWebOptions(ctx context.Context, zone, server, host string) (*WebOptions, error) {
+	var resp WebOptions
+	if err := c.do(ctx, http.MethodGet, webOptionsPath(zone, server, host), nil, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+// SetWebOptions changes the options of a name: a key with a nil value takes the option away, the keys not given stay.
+func (c *Client) SetWebOptions(ctx context.Context, zone, server, host string, options map[string]any, dryRun bool) (*WebOptions, error) {
+	body := map[string]any{"options": options}
+	if dryRun {
+		body["dry_run"] = true
+	}
+	var resp WebOptions
+	if err := c.do(ctx, http.MethodPut, webOptionsPath(zone, server, host), body, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
