@@ -377,7 +377,7 @@ func writeWebURIsTable(w io.Writer, uris []api.WebURI) error {
 	tw := newTabWriter(w)
 	fmt.Fprintln(tw, "ID\tURI\tTYPE\tTARGET\tTLS\tSTATE\tREASON")
 	for _, u := range uris {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", u.ID, u.URI, u.Type, u.Target, u.TLS, u.State, u.ErrorReason)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", u.ID, u.URI, u.Type, u.Target, u.TLS, u.State, webReason(u))
 	}
 	return tw.Flush()
 }
@@ -391,8 +391,16 @@ func writeWebSitesTable(w io.Writer, sites []api.WebSite) error {
 	fmt.Fprintln(tw, "HOST\tURI\tTYPE\tTARGET\tTLS\tSTATE\tREASON\tID")
 	for _, site := range sites {
 		for _, u := range site.URIs {
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", site.Host, u.URI, u.Type, u.Target, u.TLS, u.State, u.ErrorReason, u.ID)
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", site.Host, u.URI, u.Type, u.Target, u.TLS, u.State, webReason(u), u.ID)
 		}
 	}
 	return tw.Flush()
+}
+
+// webReason shows the reason of a refusal only while it holds: an applied URI keeps the old one in the server.
+func webReason(u api.WebURI) string {
+	if u.State == "errored" {
+		return u.ErrorReason
+	}
+	return ""
 }
