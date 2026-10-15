@@ -394,3 +394,18 @@ func TestWebOptionsRetiredLandingFalseAndEmptyMessageTakeThemAway(t *testing.T) 
 		}
 	}
 }
+
+func TestWebBucketsListsTheNamesOrSaysThereAreNone(t *testing.T) {
+	out, _, err := runWeb(t, &fakeAPI{webBuckets: []api.WebBucket{{Name: "altenwald-org"}, {Name: "games-altenwald-com"}}}, "web", "buckets")
+	if err != nil || !strings.Contains(out, "BUCKET") || !strings.Contains(out, "altenwald-org") || !strings.Contains(out, "games-altenwald-com") {
+		t.Fatalf("%v %q", err, out)
+	}
+	out, _, err = runWeb(t, &fakeAPI{}, "web", "buckets")
+	if err != nil || !strings.Contains(out, "No buckets found") {
+		t.Fatalf("%v %q", err, out)
+	}
+	out, _, err = runWeb(t, &fakeAPI{webBuckets: []api.WebBucket{{Name: "x-y"}}}, "web", "buckets", "-o", "json")
+	if err != nil || !strings.Contains(out, `"name":"x-y"`) {
+		t.Fatalf("%v %q", err, out)
+	}
+}

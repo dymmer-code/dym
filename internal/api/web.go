@@ -181,3 +181,19 @@ func (c *Client) SetWebOptions(ctx context.Context, zone, server, host string, o
 	}
 	return &resp, nil
 }
+
+// WebBucket is a Garage bucket that belongs to the user: a static URI can only point to one of these.
+type WebBucket struct {
+	Name string `json:"name"`
+}
+
+// ListWebBuckets lists the buckets of the user.
+func (c *Client) ListWebBuckets(ctx context.Context) ([]WebBucket, error) {
+	var resp struct {
+		Buckets []WebBucket `json:"buckets"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/web_buckets", nil, &resp); err != nil {
+		return nil, err
+	}
+	return resp.Buckets, nil
+}

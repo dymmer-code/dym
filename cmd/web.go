@@ -25,6 +25,7 @@ var webTLSModes = map[string]bool{"required": true, "enabled": true, "disabled":
 func newWebCommand(deps Dependencies) *cobra.Command {
 	cmd := &cobra.Command{Use: "web", Short: "Web servers"}
 	cmd.AddCommand(newWebServersCommand(deps))
+	cmd.AddCommand(newWebBucketsCommand(deps))
 	return cmd
 }
 
@@ -523,4 +524,41 @@ func webKind(u api.WebURI) string {
 		return fmt.Sprintf("redirect %d", u.RedirectStatus)
 	}
 	return u.Type
+}
+
+func newWebBucketsCommand(deps Dependencies) *cobra.Command {
+	var output string
+	cmd := &cobra.Command{
+		Use:   "buckets",
+		Short: "List the Garage buckets you can serve with a static URI",
+		Long:  "Lists your buckets. A static URI points to one as garage://name/ or garage://name/prefix/; it cannot point to a bucket that is not yours.",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if err := checkWebOutput(output); err != nil {
+				return err
+			}
+			client, err := resolveAPI(deps)
+			if err != nil {
+				return err
+			}
+			buckets, err := client.ListWebBuckets(cmd.Context())
+			if err != nil {
+				return wrapAuthError(err)
+			}
+			if output == "json" {
+				return json.NewEncoder(cmd.OutOrStdout()).Encode(buckets)
+			}
+			if len(buckets) == 0 {
+				_, err := fmt.Fprintln(cmd.OutOrStdout(), "No buckets found.")
+				return err
+			}
+			tw := newTabWriter(cmd.OutOrStdout())
+			fmt.Fprintln(tw, "BUCKET")
+			for _, b := range buckets {
+				fmt.Fprintln(tw, b.Name)
+			}
+			return tw.Flush()
+		},
+	}
+	cmd.Flags().StringVarP(&output, "output", "o", "table", `Output format: "table" or "json"`)
+	return cmd
 }

@@ -195,3 +195,17 @@ func TestTheCodeOfARedirectGoesAsANumber(t *testing.T) {
 		t.Fatalf("%+v %v", got, err)
 	}
 }
+
+func TestListWebBucketsAsksTheBucketsOfTheUser(t *testing.T) {
+	s := webServer(t, func(r *http.Request, _ map[string]any) {
+		if r.Method != http.MethodGet || r.URL.Path != "/web_buckets" {
+			t.Fatalf("%s %s", r.Method, r.URL.Path)
+		}
+	}, `{"status":"ok","buckets":[{"name":"altenwald-org"}]}`, 0)
+	defer s.Close()
+
+	got, err := NewClient(s.URL, "tok", s.Client()).ListWebBuckets(context.Background())
+	if err != nil || len(got) != 1 || got[0].Name != "altenwald-org" {
+		t.Fatalf("%+v %v", got, err)
+	}
+}

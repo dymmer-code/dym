@@ -56,6 +56,7 @@ type fakeAPI struct {
 	webErr      error
 
 	webOptions    *api.WebOptions
+	webBuckets    []api.WebBucket
 	lastWebOpts   map[string]any
 	webCalls      []string
 	lastWebZone   string
@@ -937,4 +938,12 @@ func (f *fakeAPI) SetWebOptions(_ context.Context, zone, server, host string, op
 		return nil, f.webErr
 	}
 	return &api.WebOptions{Status: "ok", Host: zone, Options: map[string]any{"hsts": true}, DryRun: dryRun}, nil
+}
+
+func (f *fakeAPI) ListWebBuckets(_ context.Context) ([]api.WebBucket, error) {
+	f.webCalls = append(f.webCalls, "buckets")
+	if f.webErr != nil {
+		return nil, f.webErr
+	}
+	return f.webBuckets, nil
 }
