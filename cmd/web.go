@@ -420,8 +420,8 @@ func webReason(u api.WebURI) string {
 
 func newWebOptionsCommand(domain string, deps Dependencies) *cobra.Command {
 	var wf webFlags
-	var hsts, blog, index bool
-	var extensions string
+	var hsts, blog, index, retired bool
+	var extensions, message string
 	cmd := &cobra.Command{
 		Use:   "options [host]",
 		Short: "Show or change the options of a name (the apex when no host is given)",
@@ -430,6 +430,8 @@ func newWebOptionsCommand(domain string, deps Dependencies) *cobra.Command {
 			"  --blog-fallback      what a static site does not have is answered with its /index.html\n" +
 			"  --index-fallback     the same, with no exception for the assets (not with --blog-fallback)\n" +
 			"  --asset-extensions   with --blog-fallback, extensions that stay a real 404, as jpg|png|css\n" +
+			"  --retired-landing    for a retired site: what a static site does not have goes to / (302) and writes get a 410\n" +
+			"  --retired-message    the text of that 410 (up to 200 characters, no quotes, backticks, braces or backslashes)\n" +
 			"Use --hsts=false to take an option away; --asset-extensions \"\" does it for the extensions.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -441,7 +443,7 @@ func newWebOptionsCommand(domain string, deps Dependencies) *cobra.Command {
 				host = args[0]
 			}
 			changes := map[string]any{}
-			for flag, key := range map[string]string{"hsts": "hsts", "blog-fallback": "blog_fallback", "index-fallback": "index_fallback"} {
+			for flag, key := range map[string]string{"hsts": "hsts", "blog-fallback": "blog_fallback", "index-fallback": "index_fallback", "retired-landing": "retired_landing"} {
 				if cmd.Flags().Changed(flag) {
 					value, _ := cmd.Flags().GetBool(flag)
 					if value {
@@ -456,6 +458,13 @@ func newWebOptionsCommand(domain string, deps Dependencies) *cobra.Command {
 					changes["asset_extensions"] = nil
 				} else {
 					changes["asset_extensions"] = extensions
+				}
+			}
+			if cmd.Flags().Changed("retired-message") {
+				if message == "" {
+					changes["retired_message"] = nil
+				} else {
+					changes["retired_message"] = message
 				}
 			}
 			client, err := resolveAPI(deps)
@@ -484,6 +493,8 @@ func newWebOptionsCommand(domain string, deps Dependencies) *cobra.Command {
 	cmd.Flags().BoolVar(&hsts, "hsts", false, "Tell the browsers to use HTTPS only")
 	cmd.Flags().BoolVar(&blog, "blog-fallback", false, "Answer what a static site does not have with its /index.html")
 	cmd.Flags().BoolVar(&index, "index-fallback", false, "The same, with no exception for the assets")
+	cmd.Flags().BoolVar(&retired, "retired-landing", false, "For a retired site: what a static site does not have goes to / (302) and writes get a 410")
+	cmd.Flags().StringVar(&message, "retired-message", "", "The text of that 410")
 	cmd.Flags().StringVar(&extensions, "asset-extensions", "", "With --blog-fallback, extensions that stay a real 404 (jpg|png|css)")
 	return cmd
 }

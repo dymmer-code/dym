@@ -370,3 +370,27 @@ func TestWebListShowsTheCodeNextToTheType(t *testing.T) {
 		t.Fatalf("%v %q", err, out)
 	}
 }
+
+func TestWebOptionsRetiredLandingAndItsMessage(t *testing.T) {
+	fake := &fakeAPI{}
+	_, _, err := runWeb(t, fake, "domain", "altenwald.com", "web", "options", "cuatro", "--retired-landing", "--retired-message", "Esta demo ha finalizado.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := fake.lastWebOpts
+	if len(got) != 2 || got["retired_landing"] != true || got["retired_message"] != "Esta demo ha finalizado." {
+		t.Fatalf("options = %v", got)
+	}
+}
+
+func TestWebOptionsRetiredLandingFalseAndEmptyMessageTakeThemAway(t *testing.T) {
+	fake := &fakeAPI{}
+	if _, _, err := runWeb(t, fake, "domain", "altenwald.com", "web", "options", "--retired-landing=false", "--retired-message", ""); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"retired_landing", "retired_message"} {
+		if v, present := fake.lastWebOpts[key]; !present || v != nil {
+			t.Fatalf("%s must be sent as nil: %v", key, fake.lastWebOpts)
+		}
+	}
+}
