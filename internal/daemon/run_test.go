@@ -1,0 +1,186 @@
+package daemon
+
+import (
+	"context"
+	"net/http"
+	"path/filepath"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+// runFor starts Run and returns a function that stops it and waits for it to end.
+func runFor(t *testing.T, o RunOptions) (stop func()) {
+	t.Helper()
+	if o.MinBackoff == 0 {
+		o.MinBackoff = 5 * time.Millisecond
+	}
+	if o.MaxBackoff == 0 {
+		o.MaxBackoff = 20 * time.Millisecond
+	}
+	if o.PollPairing == 0 {
+		o.PollPairing = 10 * time.Millisecond
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- Run(ctx, o) }()
+
+	var once sync.Once
+	stop = func() {
+		once.Do(func() {
+			cancel()
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Errorf("Run returned %v", err)
+				}
+			case <-time.After(3 * time.Second):
+				t.Error("Run did not stop")
+			}
+		})
+	}
+	t.Cleanup(stop)
+	return stop
+}
+
+func pairedState(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "daemon.json")
+	if err := SaveState(path, State{HostID: "host-1", Secret: "dymd_secret"}); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestRunConnectsWithTheSecretInHeadersAndTellsWhoTheHostIs(t *testing.T) {
+	f := newFakeServer(t)
+	runFor(t, RunOptions{URL: f.URL(), StatePath: pairedState(t), Collect: func() Inventory { return Inventory{Hostname: "rowan", CPUCores: 4} }})
+
+	eventually(t, "the join", func() bool { return len(f.Joins()) == 1 })
+
+	h := f.Headers()[0]
+	if h.Get("X-Dym-Host") != "host-1" || h.Get("X-Dym-Secret") != "dymd_secret" {
+		t.Errorf("headers = %v", h)
+	}
+	if q := f.Queries()[0]; q != "vsn=2.0.0" {
+		t.Errorf("the secret must not be in the URL: %q", q)
+	}
+	join := f.Joins()[0]
+	inv, _ := join.Payload["inventory"].(map[string]any)
+	if join.Topic != "daemon:host" || inv["hostname"] != "rowan" {
+		t.Errorf("join = %+v", join)
+	}
+}
+
+func TestRunWaitsWhileTheHostIsNotPairedAndConnectsOnceItIs(t *testing.T) {
+	f := newFakeServer(t)
+	path := filepath.Join(t.TempDir(), "daemon.json")
+	runFor(t, RunOptions{URL: f.URL(), StatePath: path})
+
+	time.Sleep(60 * time.Millisecond)
+	if len(f.Headers()) != 0 {
+		t.Fatal("it must not connect before it is paired")
+	}
+
+	if err := SaveState(path, State{HostID: "host-2", Secret: "dymd_s"}); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the connection after pairing", func() bool { return len(f.Headers()) == 1 })
+	if f.Headers()[0].Get("X-Dym-Host") != "host-2" {
+		t.Error("it must connect as the host it was paired as")
+	}
+}
+
+func TestRunReconnectsWhenTheConnectionDrops(t *testing.T) {
+	f := newFakeServer(t)
+	var drops atomic.Int32
+	f.Join = func(c *fakeConn, _ string, _ map[string]any) (string, map[string]any) {
+		if drops.Add(1) == 1 {
+			go func() {
+				time.Sleep(20 * time.Millisecond)
+				c.Drop()
+			}()
+		}
+		return "ok", map[string]any{}
+	}
+	runFor(t, RunOptions{URL: f.URL(), StatePath: pairedState(t)})
+
+	eventually(t, "a second connection", func() bool { return len(f.Joins()) >= 2 })
+}
+
+func TestRunKeepsTryingWhileDymmerRefusesAndConnectsWhenItAccepts(t *testing.T) {
+	f := newFakeServer(t)
+	var attempts atomic.Int32
+	f.Handshake = func(*http.Request) int {
+		if attempts.Add(1) <= 3 {
+			return http.StatusForbidden
+		}
+		return 0
+	}
+	runFor(t, RunOptions{URL: f.URL(), StatePath: pairedState(t)})
+
+	eventually(t, "the first accepted connection", func() bool { return len(f.Joins()) == 1 })
+	if attempts.Load() < 4 {
+		t.Errorf("attempts = %d", attempts.Load())
+	}
+}
+
+func TestRunSendsTheInventoryAgainOnlyWhenItChanged(t *testing.T) {
+	f := newFakeServer(t)
+	var pushes atomic.Int32
+	var last atomic.Value
+	f.Handle = func(_ *fakeConn, _, event string, payload map[string]any) (string, map[string]any) {
+		if event == "inventory" {
+			pushes.Add(1)
+			last.Store(payload)
+		}
+		return "ok", map[string]any{}
+	}
+
+	var memory atomic.Int64
+	memory.Store(100)
+	runFor(t, RunOptions{
+		URL: f.URL(), StatePath: pairedState(t), InventoryEvery: 15 * time.Millisecond,
+		Collect: func() Inventory { return Inventory{Hostname: "rowan", Memory: memory.Load()} },
+	})
+
+	eventually(t, "the join", func() bool { return len(f.Joins()) == 1 })
+	time.Sleep(80 * time.Millisecond)
+	if pushes.Load() != 0 {
+		t.Fatalf("nothing changed, yet it sent %d inventories", pushes.Load())
+	}
+
+	memory.Store(200)
+	eventually(t, "the new inventory", func() bool { return pushes.Load() == 1 })
+	time.Sleep(60 * time.Millisecond)
+	if pushes.Load() != 1 {
+		t.Errorf("it must send a change once, sent %d", pushes.Load())
+	}
+	if got, _ := last.Load().(map[string]any); got["memory"] != float64(200) {
+		t.Errorf("sent %v", got)
+	}
+}
+
+func TestRunStopsPromptlyWhenTheContextEnds(t *testing.T) {
+	f := newFakeServer(t)
+	stop := runFor(t, RunOptions{URL: f.URL(), StatePath: pairedState(t)})
+	eventually(t, "the join", func() bool { return len(f.Joins()) == 1 })
+
+	started := time.Now()
+	stop()
+
+	if time.Since(started) > time.Second {
+		t.Error("Run took too long to stop")
+	}
+}
+
+func TestJitterStaysWithinTwentyPercent(t *testing.T) {
+	for i := 0; i < 200; i++ {
+		got := jitter(time.Second)
+		if got < 800*time.Millisecond || got > 1200*time.Millisecond {
+			t.Fatalf("jitter = %v", got)
+		}
+	}
+}
