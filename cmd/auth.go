@@ -19,6 +19,7 @@ func newAuthCommand(deps Dependencies) *cobra.Command {
 	auth.AddCommand(newAuthLogoutCommand(deps))
 	auth.AddCommand(newAuthStatusCommand(deps))
 	auth.AddCommand(newAuthTokenHelpCommand())
+	auth.AddCommand(newAuthDaemonCommand(deps))
 	return auth
 }
 

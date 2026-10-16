@@ -8,6 +8,7 @@ import (
 
 	"github.com/dymmer-code/dym/internal/confirm"
 	"github.com/dymmer-code/dym/internal/credentials"
+	"github.com/dymmer-code/dym/internal/daemon"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
@@ -40,6 +41,12 @@ type Dependencies struct {
 	// resolution entirely. Left empty in production; tests set it directly
 	// to point at a scratch file rather than faking env vars or flags.
 	ExtensionsFile string
+
+	// Pair, RunDaemon and Inventory are what `dym auth daemon` and `dym daemon` use to talk to Dymmer and to read the
+	// host. Nil in production (the real ones); tests give their own so that nothing connects anywhere.
+	Pair      PairFunc
+	RunDaemon RunDaemonFunc
+	Inventory func() daemon.Inventory
 }
 
 func NewRootCommand(deps Dependencies) *cobra.Command {
@@ -77,6 +84,7 @@ func NewRootCommand(deps Dependencies) *cobra.Command {
 	cmd.AddCommand(newProjectCommand(deps))
 	cmd.AddCommand(newWebCommand(deps))
 	cmd.AddCommand(newExtCommand(deps))
+	cmd.AddCommand(newDaemonCommand(deps))
 	return cmd
 }
 
