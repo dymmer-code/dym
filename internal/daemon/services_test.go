@@ -86,7 +86,7 @@ func TestSystemctlStatusStoppedAndUnknown(t *testing.T) {
 
 func TestChangingAServiceIsOnlyWhatTheConfigurationAllows(t *testing.T) {
 	config := Config{Services: map[string][]string{"systemctl": {"nginx"}}}
-	env, f := envWith(config, map[string]ExecResult{"systemctl restart -- nginx": okResult("")})
+	env, f := envWith(config, map[string]ExecResult{"systemctl restart nginx": okResult("")})
 
 	if r := RunOperation(env, "systemctl.sh", []string{"nginx", "restart"}); r.Status != "OK" || r.Output != "OK" {
 		t.Errorf("allowed: %+v", r)
@@ -103,7 +103,7 @@ func TestChangingAServiceIsOnlyWhatTheConfigurationAllows(t *testing.T) {
 	if r := RunOperation(env, "docker.sh", []string{"nginx", "restart"}); r.Status != "FAIL" {
 		t.Errorf("another manager: %+v", r)
 	}
-	if got := f.lines(); !reflect.DeepEqual(got, []string{"systemctl restart -- nginx"}) {
+	if got := f.lines(); !reflect.DeepEqual(got, []string{"systemctl restart nginx"}) {
 		t.Errorf("commands run: %v", got)
 	}
 }

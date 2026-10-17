@@ -140,8 +140,10 @@ logs:                          # the only files and units that can be read
 
 Names (services, containers, actions, units) are letters, digits and `. _ @ : -`, never starting with a dash. Commands
 are run as a list of arguments, never through a shell, with a clean environment, a time limit and a bounded output.
-The service runs as an unprivileged user; to change services or run privileged actions give that user the right to run
-exactly those commands with `sudo -n` in `sudoers`.
+The service runs as an unprivileged user. What changes a service or runs a privileged action is run as the `privilege`
+prefix followed by the command, with nothing added: for `systemctl: [nginx]` and a restart, `sudo -n systemctl restart nginx`.
+Give that user the right to run exactly those lines in `sudoers` (one rule per line, as sudo resolves the command:
+`dym ALL=(root) NOPASSWD: /usr/bin/systemctl restart nginx`) and nothing else.
 
 ### `dym ext`
 

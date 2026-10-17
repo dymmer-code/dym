@@ -21,7 +21,8 @@ var (
 	systemctlManager = manager{
 		key:     "systemctl",
 		actions: []string{"start", "stop", "restart", "reload"},
-		command: func(action, name string) []string { return []string{"systemctl", action, "--", name} },
+		// Without "--": the name cannot start with a dash, and a rule of sudoers is the exact line `systemctl <action> <name>`.
+		command: func(action, name string) []string { return []string{"systemctl", action, name} },
 		status: func(env OpEnv, name string) Result {
 			load := env.run(ExecSpec{Argv: []string{"systemctl", "show", "-p", "LoadState", "--value", "--", name}, Timeout: statusTimeout})
 			if load.Err != nil || load.ExitCode != 0 || load.Output == "not-found" || load.Output == "" {
