@@ -16,60 +16,87 @@ const (
 	logTimeout = 15 * time.Second
 )
 
-// logOperation is `log_recent_matching.sh <file|journal> <path or unit> [filter]`: the last lines, among the last 500,
-// that match the filter. Only the files and the units that the owner declared can be read, whatever is asked.
-func logOperation(env OpEnv, args []string) Result {
-	if len(args) < 2 || len(args) > 3 {
-		return fail("Missing parameters.")
-	}
-	kind, target, filter := args[0], args[1], ""
-	if len(args) == 3 {
-		filter = args[2]
-	}
+// logSource is what a log operation was asked to read, once it was checked against the configuration of the owner.
+type logSource struct {
+	kind   string // "file" or "journal"
+	target string
+	match  *regexp.Regexp // nil without a filter
+}
 
-	var match *regexp.Regexp
-	if filter != "" {
-		if len(filter) > maxFilter {
-			return fail("The filter is too long.")
+// parseLog checks the arguments of `<file|journal> <path or unit> [filter]`: the type, that the path or the unit is one the
+// owner declared, and that the filter is an expression (RE2, which cannot take exponential time).
+func parseLog(env OpEnv, args []string) (logSource, *Result) {
+	if len(args) < 2 || len(args) > 3 {
+		r := fail("Missing parameters.")
+		return logSource{}, &r
+	}
+	source := logSource{kind: args[0], target: args[1]}
+
+	if len(args) == 3 && args[2] != "" {
+		if len(args[2]) > maxFilter {
+			r := fail("The filter is too long.")
+			return logSource{}, &r
 		}
-		var err error
-		if match, err = regexp.Compile(filter); err != nil {
-			return fail("The filter is not a valid expression.")
+		match, err := regexp.Compile(args[2])
+		if err != nil {
+			r := fail("The filter is not a valid expression.")
+			return logSource{}, &r
 		}
+		source.match = match
 	}
 
 	config, err := env.config()
 	if err != nil {
-		return fail("The configuration of this host cannot be read: " + err.Error())
+		r := fail("The configuration of this host cannot be read: " + err.Error())
+		return logSource{}, &r
+	}
+
+	switch source.kind {
+	case "file":
+		if !includes(config.Logs.Files, source.target) {
+			r := fail("The configuration of this host does not declare that file to be read.")
+			return logSource{}, &r
+		}
+	case "journal":
+		if !includes(config.Logs.Units, source.target) {
+			r := fail("The configuration of this host does not declare that unit to be read.")
+			return logSource{}, &r
+		}
+	default:
+		r := fail("Only a file or the journal can be read.")
+		return logSource{}, &r
+	}
+	return source, nil
+}
+
+func (l logSource) matches(line string) bool { return l.match == nil || l.match.MatchString(line) }
+
+// logOperation is `log_recent_matching.sh <file|journal> <path or unit> [filter]`: the last lines, among the last 500,
+// that match the filter. Only the files and the units that the owner declared can be read, whatever is asked.
+func logOperation(env OpEnv, args []string) Result {
+	source, refused := parseLog(env, args)
+	if refused != nil {
+		return *refused
 	}
 
 	var window []string
-	switch kind {
-	case "file":
-		if !includes(config.Logs.Files, target) {
-			return fail("The configuration of this host does not declare that file to be read.")
-		}
-		lines, readable := tailFile(target)
+	if source.kind == "file" {
+		lines, readable := tailFile(source.target)
 		if !readable {
 			return fail("The file cannot be read.")
 		}
 		window = lines
-	case "journal":
-		if !includes(config.Logs.Units, target) {
-			return fail("The configuration of this host does not declare that unit to be read.")
-		}
-		r := env.run(ExecSpec{Argv: []string{"journalctl", "-n", "500", "--no-pager", "--output=cat", "--unit=" + target}, Timeout: logTimeout})
+	} else {
+		r := env.run(ExecSpec{Argv: []string{"journalctl", "-n", "500", "--no-pager", "--output=cat", "--unit=" + source.target}, Timeout: logTimeout})
 		if r.Err != nil || r.ExitCode != 0 {
 			return fail("The journal cannot be read.")
 		}
 		window = splitLines(r.Output)
-	default:
-		return fail("Only a file or the journal can be read.")
 	}
 
 	var kept []string
 	for _, line := range window {
-		if match == nil || match.MatchString(line) {
+		if source.matches(line) {
 			kept = append(kept, line)
 		}
 	}

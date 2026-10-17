@@ -188,7 +188,7 @@ func TestFreeBSDDoesNotInventWhatItCannotMeasure(t *testing.T) {
 
 func TestOperationNamesAreTheScriptsDymmerAsksFor(t *testing.T) {
 	names := OperationNames()
-	if !sort.StringsAreSorted(names) || len(names) != 21 {
+	if !sort.StringsAreSorted(names) || len(names) != 22 {
 		t.Errorf("names %v", names)
 	}
 	for _, name := range names {

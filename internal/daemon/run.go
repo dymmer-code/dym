@@ -153,13 +153,21 @@ func connectOnce(ctx context.Context, o RunOptions, state State) error {
 	}
 	sendStats()
 
+	// Whatever the operations started ends with the connection.
+	connCtx, endConn := context.WithCancel(ctx)
+	defer endConn()
 	ops := newOperationRunner(o, conn)
 
 	for {
 		select {
 		case event := <-conn.Events():
-			if event.Name == "exec" {
-				ops.handle(ctx, event.Payload)
+			switch event.Name {
+			case "exec":
+				ops.handle(connCtx, event.Payload)
+			case "stream_start":
+				ops.startStream(connCtx, event.Payload)
+			case "stream_stop":
+				ops.stopStream(event.Payload)
 			}
 		case <-statsTicker.C:
 			sendStats()

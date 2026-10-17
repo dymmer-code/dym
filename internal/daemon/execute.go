@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -77,6 +78,63 @@ func HostExec(ctx context.Context, spec ExecSpec) ExecResult {
 		killGroup(cmd.Process.Pid)
 		<-done
 		return ExecResult{Output: out.String(), ExitCode: -1, Err: ctx.Err()}
+	}
+}
+
+// StreamFunc runs a command and hands over its output line by line while it runs, until it ends or ctx does.
+type StreamFunc func(ctx context.Context, spec ExecSpec, onLine func(string)) ExecResult
+
+// maxLine bounds one line of a stream; a longer one is cut.
+const maxLine = 32 * 1024
+
+// HostStream is HostExec for a command that keeps running (`journalctl -f`): the same without a shell, with a clean
+// environment and its own process group, and the standard output delivered line by line.
+func HostStream(ctx context.Context, spec ExecSpec, onLine func(string)) ExecResult {
+	if len(spec.Argv) == 0 {
+		return ExecResult{ExitCode: -1, Err: errors.New("no command")}
+	}
+	if spec.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, spec.Timeout)
+		defer cancel()
+	}
+
+	cmd := exec.Command(spec.Argv[0], spec.Argv[1:]...)
+	cmd.Dir = spec.Dir
+	cmd.Env = []string{"PATH=" + pathOfCommands, "LC_ALL=C", "HOME=" + os.TempDir()}
+	for k, v := range spec.Env {
+		cmd.Env = append(cmd.Env, k+"="+v)
+	}
+	ownProcessGroup(cmd)
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return ExecResult{ExitCode: -1, Err: err}
+	}
+	if err := cmd.Start(); err != nil {
+		return ExecResult{ExitCode: -1, Err: err}
+	}
+
+	read := make(chan struct{})
+	go func() {
+		defer close(read)
+		scanner := bufio.NewScanner(stdout)
+		scanner.Buffer(make([]byte, 0, 64*1024), maxLine)
+		for scanner.Scan() {
+			onLine(scanner.Text())
+		}
+	}()
+
+	done := make(chan error, 1)
+	go func() { <-read; done <- cmd.Wait() }()
+
+	select {
+	case err := <-done:
+		return ExecResult{ExitCode: exitCode(err), Err: nonExit(err)}
+	case <-ctx.Done():
+		killGroup(cmd.Process.Pid)
+		<-done
+		return ExecResult{ExitCode: -1, Err: ctx.Err()}
 	}
 }
 

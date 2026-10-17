@@ -21,14 +21,16 @@ type PairFunc func(ctx context.Context, o daemon.PairOptions) (daemon.State, err
 type RunDaemonFunc func(ctx context.Context, o daemon.RunOptions) error
 
 type daemonFlags struct {
-	server string
-	state  string
-	config string
+	server      string
+	state       string
+	config      string
+	checkConfig bool
 }
 
 func (f *daemonFlags) add(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&f.server, "server", "", "address of Dymmer (default $DYM_SERVER or "+defaultServer+")")
 	cmd.Flags().StringVar(&f.config, "config", "", "file where the owner of the host writes what Dymmer may change and read (default /etc/dym/daemon.yaml for root, the user's config otherwise)")
+	cmd.Flags().BoolVar(&f.checkConfig, "check-config", false, "only read the configuration file, say whether it is valid, and exit")
 	cmd.Flags().StringVar(&f.state, "state", "", "file where the pairing is kept (default /var/lib/dym/daemon.json for root, the user's config otherwise)")
 }
 
@@ -131,6 +133,21 @@ func newDaemonCommand(deps Dependencies) *cobra.Command {
 			"readable logs). Pair the host first with `dym auth daemon`.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			configPath := flags.config
+			if configPath == "" {
+				var err error
+				if configPath, err = daemon.DefaultConfigPath(); err != nil {
+					return err
+				}
+			}
+			if flags.checkConfig {
+				if _, err := daemon.LoadConfig(configPath); err != nil {
+					return err
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "%s is valid\n", configPath)
+				return nil
+			}
+
 			socket, statePath, err := flags.resolve(deps)
 			if err != nil {
 				return err
@@ -140,12 +157,6 @@ func newDaemonCommand(deps Dependencies) *cobra.Command {
 			defer stop()
 
 			logger := slog.New(slog.NewTextHandler(cmd.ErrOrStderr(), nil))
-			configPath := flags.config
-			if configPath == "" {
-				if configPath, err = daemon.DefaultConfigPath(); err != nil {
-					return err
-				}
-			}
 			return deps.runDaemon()(ctx, daemon.RunOptions{URL: socket, StatePath: statePath, ConfigPath: configPath, Logger: logger})
 		},
 	}

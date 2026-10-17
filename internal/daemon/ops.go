@@ -36,6 +36,7 @@ func (r Result) Payload() map[string]any {
 type OpEnv struct {
 	StatsSystem
 	Exec   ExecFunc
+	Stream StreamFunc
 	Config func() (Config, error)
 }
 
@@ -52,6 +53,7 @@ func HostOpEnv(goos, configPath string) OpEnv {
 	return OpEnv{
 		StatsSystem: HostStatsSystem(goos),
 		Exec:        HostExec,
+		Stream:      HostStream,
 		Config:      func() (Config, error) { return LoadConfig(configPath) },
 	}
 }
@@ -95,8 +97,11 @@ func Operations() map[string]Operation {
 
 // OperationNames lists them, sorted, for the host to tell Dymmer which ones it answers.
 func OperationNames() []string {
-	names := make([]string, 0, len(Operations()))
+	names := make([]string, 0, len(Operations())+len(Streams()))
 	for name := range Operations() {
+		names = append(names, name)
+	}
+	for name := range Streams() {
 		names = append(names, name)
 	}
 	sort.Strings(names)

@@ -111,11 +111,12 @@ not in it is refused. Dymmer never sends a script or a command line.
 | Status of a service: `systemctl.sh`, `service.sh`, `init_d.sh`, `docker.sh`, `pm2.sh`, `supervisord.sh`, `docker_compose.sh` (with `status`) | No, for any valid name. For `docker_compose.sh` the project must be declared. |
 | Start, stop, restart or reload a service | Yes: only what is listed under `services` or `compose`. |
 | `action.sh <name>` | Yes: only the actions declared under `actions`. |
-| `log_recent_matching.sh` | Yes: only the files and units declared under `logs`. |
+| `log_recent_matching.sh`, and following a log live (`log_follow.sh`, a stream that Dymmer can stop) | Yes: only the files and units declared under `logs`. At most two streams are open at once. |
 
 What changes the host or reads more than measurements is written by the owner of the host in
 `/etc/dym/daemon.yaml` (for root; `--config` changes it). The file is read again for every order, so a change needs no
-restart. Without the file nothing that changes the host can be asked. A file that has an error is refused as a whole.
+restart. Without the file nothing that changes the host can be asked. A file that has an error is refused as a whole;
+`dym daemon --check-config` reads it and says whether it is valid, which is what to run before putting a new one in place.
 
 ```yaml
 privilege: [sudo, -n]          # put before the commands that change something (optional)

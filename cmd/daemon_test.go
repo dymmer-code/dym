@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -126,5 +128,35 @@ func TestTheDaemonCommandsTakeNoArguments(t *testing.T) {
 		if err := cmd.Execute(); err == nil {
 			t.Errorf("%v must be refused", args)
 		}
+	}
+}
+
+func TestDaemonChecksTheConfigurationWithoutConnecting(t *testing.T) {
+	dir := t.TempDir()
+	good := filepath.Join(dir, "good.yaml")
+	bad := filepath.Join(dir, "bad.yaml")
+	_ = os.WriteFile(good, []byte("services:\n  systemctl: [nginx]\n"), 0o600)
+	_ = os.WriteFile(bad, []byte("services:\n  systemctl: ['a b']\n"), 0o600)
+
+	ran := false
+	check := func(path string) (string, error) {
+		out := new(bytes.Buffer)
+		cmd := NewRootCommand(Dependencies{
+			Out: out, Err: new(bytes.Buffer), Env: env(nil),
+			RunDaemon: func(context.Context, daemon.RunOptions) error { ran = true; return nil },
+		})
+		cmd.SetArgs([]string{"daemon", "--check-config", "--config", path})
+		err := cmd.Execute()
+		return out.String(), err
+	}
+
+	if out, err := check(good); err != nil || !strings.Contains(out, "is valid") {
+		t.Errorf("good: %q %v", out, err)
+	}
+	if _, err := check(bad); err == nil || !strings.Contains(err.Error(), "not a valid name") {
+		t.Errorf("bad: %v", err)
+	}
+	if ran {
+		t.Error("checking the configuration connected the daemon")
 	}
 }

@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -374,4 +375,125 @@ func TestRunIsBusyBeyondTheLimitAndAnswersTheRest(t *testing.T) {
 		defer got.mu.Unlock()
 		return len(got.results) == maxRunning+2
 	})
+}
+
+// streams collects what a stream sends back: its data, by id, and how it ended.
+type streams struct {
+	mu   sync.Mutex
+	data map[string]string
+	end  map[string]map[string]any
+}
+
+func (s *streams) record(event string, payload map[string]any) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	id, _ := payload["id"].(string)
+	switch event {
+	case "stream_data":
+		text, _ := payload["data"].(string)
+		s.data[id] += text
+	case "stream_end":
+		s.end[id] = payload
+	}
+}
+
+func (s *streams) text(id string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.data[id]
+}
+
+func (s *streams) ended(id string) map[string]any {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.end[id]
+}
+
+func runWithStreams(t *testing.T, files ...string) (*fakeServer, *streams) {
+	t.Helper()
+	f := newFakeServer(t)
+	got := &streams{data: map[string]string{}, end: map[string]map[string]any{}}
+	f.Handle = func(_ *fakeConn, _, event string, payload map[string]any) (string, map[string]any) {
+		got.record(event, payload)
+		return "ok", map[string]any{}
+	}
+	env := OpEnv{Config: func() (Config, error) { return Config{Logs: LogsConfig{Files: files}}, nil }}
+	runFor(t, RunOptions{
+		URL: f.URL(), StatePath: pairedState(t), Operations: &env,
+		Collect:      func() Inventory { return Inventory{Hostname: "rowan"} },
+		CollectStats: func() (Stats, bool) { return Stats{}, false },
+	})
+	eventually(t, "the join", func() bool { return len(f.Joins()) == 1 })
+	return f, got
+}
+
+func TestRunFollowsALogUntilItIsToldToStop(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "app.log")
+	if err := os.WriteFile(path, []byte("one\ntwo\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f, got := runWithStreams(t, path)
+
+	f.Last().Push("daemon:host", "stream_start", map[string]any{"id": "s1", "name": "log_follow.sh", "args": []any{"file", path}})
+	eventually(t, "the first lines", func() bool { return got.text("s1") == "one\ntwo\n" })
+
+	appendTo(t, path, "three\n")
+	eventually(t, "the new line", func() bool { return got.text("s1") == "one\ntwo\nthree\n" })
+
+	f.Last().Push("daemon:host", "stream_stop", map[string]any{"id": "s1"})
+	eventually(t, "the end", func() bool { return got.ended("s1") != nil })
+	if end := got.ended("s1"); end["status"] != "OK" {
+		t.Errorf("a stop ended as %v", end)
+	}
+}
+
+func TestRunRefusesAStreamThatIsNotOneOrNotDeclared(t *testing.T) {
+	declared := filepath.Join(t.TempDir(), "ok.log")
+	_ = os.WriteFile(declared, []byte("x\n"), 0o600)
+	f, got := runWithStreams(t, declared)
+
+	f.Last().Push("daemon:host", "stream_start", map[string]any{"id": "a", "name": "cpu_usage_percent.sh", "args": []any{}})
+	f.Last().Push("daemon:host", "stream_start", map[string]any{"id": "b", "name": "log_follow.sh", "args": []any{"file", "/etc/passwd"}})
+	f.Last().Push("daemon:host", "stream_start", map[string]any{"id": "c", "name": "log_follow.sh", "args": "file"})
+	f.Last().Push("daemon:host", "stream_start", map[string]any{"name": "log_follow.sh", "args": []any{"file", declared}})
+
+	for _, id := range []string{"a", "b", "c"} {
+		id := id
+		eventually(t, "the refusal of "+id, func() bool { return got.ended(id) != nil })
+		if got.ended(id)["status"] != "FAIL" || got.text(id) != "" {
+			t.Errorf("%s was not refused: %v %q", id, got.ended(id), got.text(id))
+		}
+	}
+}
+
+func TestRunOpensOnlyAFewStreamsAtOnce(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "app.log")
+	_ = os.WriteFile(path, []byte("x\n"), 0o600)
+	f, got := runWithStreams(t, path)
+
+	for _, id := range []string{"1", "2", "3"} {
+		f.Last().Push("daemon:host", "stream_start", map[string]any{"id": id, "name": "log_follow.sh", "args": []any{"file", path}})
+	}
+	eventually(t, "the third refused", func() bool {
+		end := got.ended("3")
+		return end != nil && end["message"] == "the host has too many streams open"
+	})
+	for _, id := range []string{"1", "2"} {
+		if got.ended(id) != nil {
+			t.Errorf("stream %s was ended: %v", id, got.ended(id))
+		}
+	}
+}
+
+func TestStreamsEndWithTheConnection(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "app.log")
+	_ = os.WriteFile(path, []byte("x\n"), 0o600)
+	f, got := runWithStreams(t, path)
+
+	f.Last().Push("daemon:host", "stream_start", map[string]any{"id": "s", "name": "log_follow.sh", "args": []any{"file", path}})
+	eventually(t, "the stream", func() bool { return got.text("s") != "" })
+
+	f.Last().Drop()
+	// The daemon reconnects by itself; the old stream must not go on in the background.
+	eventually(t, "a second connection", func() bool { return len(f.Joins()) == 2 })
 }
