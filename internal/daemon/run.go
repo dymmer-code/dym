@@ -22,6 +22,8 @@ type RunOptions struct {
 	// CollectStats takes a sample of how the host is doing; the default reads the machine. It says false when there
 	// is nothing to send (a system that is not supported).
 	CollectStats func() (Stats, bool)
+	// Stats is the machine the operations read; the default is the host itself.
+	Operations *StatsSystem
 	// Logger receives what happens; the default discards it.
 	Logger *slog.Logger
 	// MinBackoff and MaxBackoff bound the wait between attempts to connect (1s and 60s by default).
@@ -125,7 +127,9 @@ func connectOnce(ctx context.Context, o RunOptions, state State) error {
 	defer conn.Close()
 
 	sent := o.Collect()
-	if _, err := conn.Join(ctx, "daemon:host", map[string]any{"inventory": sent.Payload()}); err != nil {
+	// It tells Dymmer which operations it answers, so that Dymmer asks only for those.
+	hello := map[string]any{"inventory": sent.Payload(), "operations": OperationNames()}
+	if _, err := conn.Join(ctx, "daemon:host", hello); err != nil {
 		return err
 	}
 	o.Logger.Info("connected to Dymmer", "host_id", state.HostID)
@@ -146,8 +150,14 @@ func connectOnce(ctx context.Context, o RunOptions, state State) error {
 	}
 	sendStats()
 
+	ops := newOperationRunner(o, conn)
+
 	for {
 		select {
+		case event := <-conn.Events():
+			if event.Name == "exec" {
+				ops.handle(ctx, event.Payload)
+			}
 		case <-statsTicker.C:
 			sendStats()
 		case <-conn.Done():

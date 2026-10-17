@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -235,4 +236,142 @@ func TestRunSendsNoStatisticsWhenThereIsNothingToSend(t *testing.T) {
 	if samples.Load() != 0 {
 		t.Errorf("sent %d samples of a system that gives none", samples.Load())
 	}
+}
+
+// orders collects the "exec_result" messages that the client sends back.
+type orders struct {
+	mu      sync.Mutex
+	results []map[string]any
+}
+
+func (o *orders) add(payload map[string]any) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.results = append(o.results, payload)
+}
+
+func (o *orders) byID(id string) map[string]any {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	for _, r := range o.results {
+		if r["id"] == id {
+			return r
+		}
+	}
+	return nil
+}
+
+func runWithOperations(t *testing.T, sys StatsSystem) (*fakeServer, *orders) {
+	t.Helper()
+	f := newFakeServer(t)
+	got := &orders{}
+	f.Handle = func(_ *fakeConn, _, event string, payload map[string]any) (string, map[string]any) {
+		if event == "exec_result" {
+			got.add(payload)
+		}
+		return "ok", map[string]any{}
+	}
+	runFor(t, RunOptions{
+		URL: f.URL(), StatePath: pairedState(t), Operations: &sys,
+		Collect:      func() Inventory { return Inventory{Hostname: "rowan"} },
+		CollectStats: func() (Stats, bool) { return Stats{}, false },
+	})
+	eventually(t, "the join", func() bool { return len(f.Joins()) == 1 })
+	return f, got
+}
+
+func TestRunTellsDymmerWhichOperationsItAnswers(t *testing.T) {
+	f, _ := runWithOperations(t, linuxOps())
+
+	names, _ := f.Joins()[0].Payload["operations"].([]any)
+	if len(names) != len(OperationNames()) || names[0] != OperationNames()[0] {
+		t.Errorf("the join said %v", names)
+	}
+}
+
+func TestRunAnswersAnOrderWithTheResultOfThatOperation(t *testing.T) {
+	f, got := runWithOperations(t, linuxOps())
+
+	f.Last().Push("daemon:host", "exec", map[string]any{"id": "o1", "name": "memory_used_bytes.sh", "args": []any{}})
+
+	eventually(t, "the result", func() bool { return got.byID("o1") != nil })
+	r := got.byID("o1")
+	if r["status"] != "OK" || r["message"] != "1024000000" {
+		t.Errorf("answered %v", r)
+	}
+}
+
+func TestRunRefusesWhatIsNotAnOperationOrIsMalformed(t *testing.T) {
+	ran := false
+	sys := linuxOps()
+	sys.Run = func(string, ...string) (string, error) { ran = true; return "", nil }
+	f, got := runWithOperations(t, sys)
+
+	orders := map[string]map[string]any{
+		"unknown":   {"id": "u", "name": "rm -rf /", "args": []any{}},
+		"arguments": {"id": "a", "name": "cpu_usage_percent.sh", "args": []any{"x"}},
+		"badargs":   {"id": "b", "name": "cpu_usage_percent.sh", "args": "x"},
+		"nonstring": {"id": "n", "name": "cpu_usage_percent.sh", "args": []any{5}},
+		"toomany":   {"id": "m", "name": "cpu_usage_percent.sh", "args": []any{"1", "2", "3", "4", "5", "6", "7", "8", "9"}},
+		"toolong":   {"id": "l", "name": "cpu_usage_percent.sh", "args": []any{strings.Repeat("a", 600)}},
+	}
+	for _, order := range orders {
+		f.Last().Push("daemon:host", "exec", order)
+	}
+	for _, id := range []string{"u", "a", "b", "n", "m", "l"} {
+		id := id
+		eventually(t, "the refusal of "+id, func() bool { return got.byID(id) != nil })
+		if got.byID(id)["status"] != "FAIL" {
+			t.Errorf("%s was not refused: %v", id, got.byID(id))
+		}
+	}
+	if ran {
+		t.Error("something was run for an order that was not valid")
+	}
+}
+
+func TestRunIgnoresAnOrderWithoutAnId(t *testing.T) {
+	f, got := runWithOperations(t, linuxOps())
+
+	f.Last().Push("daemon:host", "exec", map[string]any{"name": "memory_used_bytes.sh"})
+	f.Last().Push("daemon:host", "exec", map[string]any{"id": "after", "name": "memory_used_bytes.sh"})
+
+	eventually(t, "the order that has an id", func() bool { return got.byID("after") != nil })
+	got.mu.Lock()
+	defer got.mu.Unlock()
+	if len(got.results) != 1 {
+		t.Errorf("answered %d orders, want only the one with an id", len(got.results))
+	}
+}
+
+func TestRunIsBusyBeyondTheLimitAndAnswersTheRest(t *testing.T) {
+	release := make(chan struct{})
+	sys := linuxOps()
+	sys.ReadFile = func(path string) ([]byte, error) {
+		<-release // every operation waits here, so the limit is reached
+		return []byte(procMeminfo), nil
+	}
+	f, got := runWithOperations(t, sys)
+
+	for i := 0; i < maxRunning+2; i++ {
+		f.Last().Push("daemon:host", "exec", map[string]any{"id": "b" + string(rune('a'+i)), "name": "memory_used_bytes.sh"})
+	}
+	busy := 0
+	eventually(t, "the refusals for being busy", func() bool {
+		got.mu.Lock()
+		defer got.mu.Unlock()
+		busy = 0
+		for _, r := range got.results {
+			if r["message"] == "the host is busy" {
+				busy++
+			}
+		}
+		return busy == 2
+	})
+	close(release)
+	eventually(t, "the ones that were running", func() bool {
+		got.mu.Lock()
+		defer got.mu.Unlock()
+		return len(got.results) == maxRunning+2
+	})
 }

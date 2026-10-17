@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -59,6 +60,8 @@ type StatsSystem struct {
 	Statfs func(path string) (total, free uint64, err error)
 	// Run runs a command and gives its output (FreeBSD is read through sysctl, netstat and df).
 	Run func(name string, args ...string) (string, error)
+	// Sleep waits; the operations that take two samples use it (tests do not wait).
+	Sleep func(time.Duration)
 	// Now is the clock; the uptime of FreeBSD is the time since the boot it reports.
 	Now func() time.Time
 	// ResolveDevice follows /dev/mapper/x and similar links to the name the kernel counts I/O under (dm-0).
@@ -67,7 +70,7 @@ type StatsSystem struct {
 
 // HostStatsSystem is the machine the daemon runs on.
 func HostStatsSystem(goos string) StatsSystem {
-	return StatsSystem{GOOS: goos, ReadFile: readFile, Statfs: statfs, ResolveDevice: resolveDevice, Run: run, Now: time.Now}
+	return StatsSystem{GOOS: goos, ReadFile: readFile, Statfs: statfs, ResolveDevice: resolveDevice, Run: run, Now: time.Now, Sleep: time.Sleep}
 }
 
 func run(name string, args ...string) (string, error) {
@@ -245,3 +248,6 @@ func unescapeMount(path string) string {
 	}
 	return b.String()
 }
+
+// currentGOOS is the system the daemon runs on.
+var currentGOOS = runtime.GOOS
