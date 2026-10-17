@@ -14,6 +14,11 @@
 go install github.com/dymmer-code/dym@latest
 ```
 
+## Documentation
+
+- [`dym daemon`](docs/daemon.md): connect a host to Dymmer without SSH, with its [configuration file](docs/daemon-configuration.md) and [how to run it as a service](docs/daemon-service.md)
+- [Extensions](docs/extensions.md): use `dym` as a generic client for any web service that speaks JSON
+
 ## Authentication
 
 `dym` needs a Dymmer API token to talk to the API.
@@ -96,97 +101,22 @@ Content flags accepted by `create` and `update` (only the ones you set are sent 
 
 ### `dym daemon`
 
-Keeps a host connected to Dymmer without SSH: the host opens the connection, so it works behind NAT or a firewall.
-Pair the host once with `dym auth daemon` (it shows a PIN; type it in Dymmer, in **Hosts → Add with dym** or in the
-edition of a host that already exists), then run `dym daemon` as a service.
+Keeps a host connected to Dymmer without SSH: the host opens the connection, so it works behind NAT or a firewall, and
+Dymmer needs no key, no open port and no access to the host. Pair the host once with `dym auth daemon` (it shows a PIN
+that you type in Dymmer), then run `dym daemon` as a service.
 
-The daemon does not accept commands or scripts. It tells Dymmer that the host is alive and what it is (system, CPU,
-memory, addresses), sends its statistics every five minutes, and answers the **operations** that Dymmer asks for by
-name. Each operation is a fixed implementation inside this program, for Linux and FreeBSD, and an operation that is
-not in it is refused. Dymmer never sends a script or a command line.
+| Command | Description |
+| --- | --- |
+| `dym auth daemon [--server <address>] [--state <file>]` | Pair this host with Dymmer with a one-time PIN |
+| `dym daemon [--server <address>] [--state <file>] [--config <file>] [--check-config]` | Keep this host connected; answer what Dymmer asks by name |
 
-| Operation | Needs the configuration file? |
-|---|---|
-| Measurements: `cpu_usage_percent.sh`, `cpu_time_seconds_total.sh`, `memory_used_bytes.sh`, `memory_cached_bytes.sh`, `disk_used_bytes.sh`, `disk_io_reads_total.sh`, `disk_io_writes_total.sh`, `disk_io_duration_seconds.sh`, `network_receive_bytes_total.sh`, `network_transmit_bytes_total.sh`, `network_active_connections.sh`, `system_uptime_seconds.sh` | No. They only read. |
-| Status of a service: `systemctl.sh`, `service.sh`, `init_d.sh`, `docker.sh`, `pm2.sh`, `supervisord.sh`, `docker_compose.sh` (with `status`) | No, for any valid name. For `docker_compose.sh` the project must be declared. |
-| Start, stop, restart or reload a service | Yes: only what is listed under `services` or `compose`. |
-| `action.sh <name>` | Yes: only the actions declared under `actions`. |
-| `log_recent_matching.sh`, and following a log live (`log_follow.sh`, a stream that Dymmer can stop) | Yes: only the files and units declared under `logs`. At most two streams are open at once. |
+The daemon never accepts a script or a command line from Dymmer. It answers a fixed set of operations (measurements,
+the status of a service) and, only for what the owner of the host declares in a configuration file, changes to services,
+named actions and reading or following logs. It runs as **whoever starts it**: use a user of its own, never root.
 
-What changes the host or reads more than measurements is written by the owner of the host in
-`/etc/dym/daemon.yaml` (for root; `--config` changes it). The file is read again for every order, so a change needs no
-restart. Without the file nothing that changes the host can be asked. A file that has an error is refused as a whole;
-`dym daemon --check-config` reads it and says whether it is valid, which is what to run before putting a new one in place.
-
-```yaml
-privilege: [sudo, -n]          # put before the commands that change something (optional)
-services:                      # what Dymmer may start, stop, restart or reload
-  systemctl: [nginx, myapp]
-  docker: [web]
-compose:                       # docker compose projects; every operation on one needs its entry
-  - path: /srv/app
-    services: [web, worker]
-actions:                       # what an action of a project, or a command of a deployment, may run
-  deploy-site:
-    command: [/usr/local/bin/deploy-site, --prod]
-    dir: /srv/site
-    env: {MODE: prod}
-    timeout: 5m                # one minute by default, half an hour at most
-    privileged: true           # run with the `privilege` prefix
-logs:                          # the only files and units that can be read
-  files: [/var/log/nginx/access.log]
-  units: [nginx]
-```
-
-Names (services, containers, actions, units) are letters, digits and `. _ @ : -`, never starting with a dash. Commands
-are run as a list of arguments, never through a shell, with a time limit and a bounded output. A command gets a small
-environment: a fixed `PATH`, the home of the user that runs the daemon, `USER`, `LOGNAME`, `XDG_RUNTIME_DIR`,
-`DOCKER_HOST`, `DOCKER_CONFIG` and `DBUS_SESSION_BUS_ADDRESS` when the daemon has them, and what the action itself
-declares under `env`. Nothing else of the environment of the daemon is passed on.
-
-#### Running it as a service
-
-`dym daemon` is one binary and it runs as **whoever starts it**: every action, log and service command is done as that
-user, with its files, its Docker and its `$HOME`. There is no `dym` user unless you make one. Pair once as that user
-(`dym auth daemon`), then run `dym daemon` under your init system. With systemd, as a service of the system:
-
-```ini
-# /etc/systemd/system/dym-daemon.service
-[Unit]
-Description=Dymmer daemon
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-User=debian
-ExecStart=/usr/local/bin/dym daemon
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-```
-
-or as a service of that user (`systemctl --user enable --now dym-daemon`, plus `loginctl enable-linger debian` to keep it
-after logging out). Without `--state` and `--config` a user other than root keeps both under `~/.config/dym/`.
-
-An action can call a script of that user, for example `~/bin/rebuild-queues.sh` with the `docker compose exec …` inside:
-
-```yaml
-# ~/.config/dym/daemon.yaml
-actions:
-  rebuild-queues:
-    command: [/home/debian/bin/rebuild-queues.sh]
-    timeout: 5m
-```
-
-In Dymmer the action is written with its name, `rebuild-queues`. The path is absolute because the command is not run
-through a shell; inside the script `$HOME` and everything else of a shell script works as usual.
-
-Changing services and running things as root is only for the commands that the user may run with `sudo -n`: what
-changes a service or runs a `privileged` action is run as the `privilege` prefix followed by the command, with nothing
-added (for `systemctl: [nginx]` and a restart, `sudo -n systemctl restart nginx`). Give the user the right to run exactly
-those lines in `sudoers` (`debian ALL=(root) NOPASSWD: /usr/bin/systemctl restart nginx`) and nothing else.
+- [`dym daemon`: what it does, quick start, every option](docs/daemon.md)
+- [The configuration file](docs/daemon-configuration.md): services, Docker Compose projects, actions, logs and `sudo`
+- [Running it as a service](docs/daemon-service.md): which user, systemd, FreeBSD, and how to do it as a normal user without root
 
 ### `dym ext`
 
@@ -220,6 +150,8 @@ Field names are the API's real JSON field names, not always the same as the CLI'
 **`--select field1,field2,...`** (comma-separated, single flag) reduces which fields are shown, in the given order — for both `--output table` (columns become the selected fields, headers uppercased, e.g. `content.ip` -> `CONTENT.IP`) and `--output json` (each object contains exactly those keys, in that order; a field that doesn't resolve on a row renders as an empty table cell or JSON `null`). `--select` applies everywhere a command renders a result: the four list commands above, plus `records create`/`update`/`delete` (projecting the fields of the single created/updated/deleted record). Leaving `--select` unset keeps the existing fixed-column table / full-object JSON output unchanged.
 
 ## Extensions
+
+A step-by-step guide, with what it can and cannot do, is in [docs/extensions.md](docs/extensions.md).
 
 `dym` ships with **zero** extensions by default. `dym ext` is a generic escape hatch: a YAML config file where you declare arbitrary HTTP calls against Dymmer (or Dymmer-adjacent) endpoints `dym` doesn't have a built-in command for, and `dym` turns each declared entry into a real subcommand — `dym ext <name>` — with no code changes required.
 

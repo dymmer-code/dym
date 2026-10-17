@@ -13,6 +13,9 @@ const (
 	maxRunning = 4
 	// operationTimeout bounds one operation. Dymmer gives up earlier, so this only stops what nobody waits for.
 	operationTimeout = 20 * time.Second
+	// actionMargin is what an action gets on top of its own time (at most maxActionTimeout, enforced when it runs):
+	// the action ends itself first, and this only keeps the runner from cutting it short.
+	actionMargin = 10 * time.Second
 	// maxArgs and maxArgLength bound what an order may carry, before any operation looks at it.
 	maxArgs      = 8
 	maxArgLength = 512
@@ -67,7 +70,7 @@ func (r *operationRunner) handle(ctx context.Context, order map[string]any) {
 
 	go func() {
 		defer func() { <-r.running }()
-		opCtx, cancel := context.WithTimeout(ctx, operationTimeout)
+		opCtx, cancel := context.WithTimeout(ctx, timeoutFor(name))
 		defer cancel()
 
 		done := make(chan Result, 1)
@@ -174,4 +177,14 @@ func (r *operationRunner) end(ctx context.Context, id string, result Result) {
 	if _, err := r.conn.Push(ctx, "daemon:host", "stream_end", payload); err != nil {
 		r.logger.Warn("cannot send the end of a stream", "error", err)
 	}
+}
+
+// timeoutFor is how long the runner waits for an operation. Measurements and readings are quick, so they get a short
+// time; an action is what the owner wrote and may take as long as the owner allowed it (its own timeout, which
+// enforces itself), so the runner waits for it as long as the longest it can be.
+func timeoutFor(name string) time.Duration {
+	if name == "action.sh" {
+		return maxActionTimeout + actionMargin
+	}
+	return operationTimeout
 }

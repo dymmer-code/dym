@@ -27,11 +27,17 @@ type daemonFlags struct {
 	checkConfig bool
 }
 
-func (f *daemonFlags) add(cmd *cobra.Command) {
+// addPairing registers what pairing needs: where Dymmer is and where the pairing is kept.
+func (f *daemonFlags) addPairing(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&f.server, "server", "", "address of Dymmer (default $DYM_SERVER or "+defaultServer+")")
-	cmd.Flags().StringVar(&f.config, "config", "", "file where the owner of the host writes what Dymmer may change and read (default /etc/dym/daemon.yaml for root, the user's config otherwise)")
+	cmd.Flags().StringVar(&f.state, "state", "", "file where the pairing is kept (default /var/lib/dym/daemon.json for root; for any other user daemon.json in the user's config directory, such as ~/.config/dym/)")
+}
+
+// add registers everything the daemon takes: what pairing takes, and the configuration of the owner.
+func (f *daemonFlags) add(cmd *cobra.Command) {
+	f.addPairing(cmd)
+	cmd.Flags().StringVar(&f.config, "config", "", "file where the owner of the host writes what Dymmer may change and read (default /etc/dym/daemon.yaml for root; for any other user daemon.yaml in the user's config directory, such as ~/.config/dym/)")
 	cmd.Flags().BoolVar(&f.checkConfig, "check-config", false, "only read the configuration file, say whether it is valid, and exit")
-	cmd.Flags().StringVar(&f.state, "state", "", "file where the pairing is kept (default /var/lib/dym/daemon.json for root, the user's config otherwise)")
 }
 
 func (f *daemonFlags) resolve(deps Dependencies) (socket, statePath string, err error) {
@@ -115,7 +121,7 @@ func newAuthDaemonCommand(deps Dependencies) *cobra.Command {
 			return nil
 		},
 	}
-	flags.add(cmd)
+	flags.addPairing(cmd)
 	return cmd
 }
 

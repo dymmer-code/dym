@@ -211,3 +211,18 @@ func TestWholeDisk(t *testing.T) {
 		}
 	}
 }
+
+func TestTheRunnerWaitsForAnActionAsLongAsItMayTakeAndForTheRestOnlyAMoment(t *testing.T) {
+	if got := timeoutFor("action.sh"); got != maxActionTimeout+actionMargin {
+		t.Errorf("an action: %s", got)
+	}
+	for _, name := range append([]string{"systemctl.sh", "log_recent_matching.sh", "docker_compose.sh"}, metricOperations...) {
+		if got := timeoutFor(name); got != operationTimeout {
+			t.Errorf("%s: %s", name, got)
+		}
+	}
+	// An action that is allowed more time than the quick operations must not be cut by the quick limit.
+	if timeoutFor("action.sh") <= operationTimeout {
+		t.Error("the limit of an action is not longer than the limit of a measurement")
+	}
+}
