@@ -41,6 +41,37 @@ type ExecFunc func(ctx context.Context, spec ExecSpec) ExecResult
 // pathOfCommands is where commands are found: the service has no login, so it does not have the PATH of one.
 const pathOfCommands = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
+// inheritedEnv are the variables of the environment of the daemon that a command gets. The daemon runs as the user
+// that started it (a service the owner wrote, as that user), so these are the owner's own: where the home is, who the
+// user is, and what rootless Docker and a user's D-Bus need to find their sockets. Nothing else is passed on.
+var inheritedEnv = []string{"USER", "LOGNAME", "XDG_RUNTIME_DIR", "DOCKER_HOST", "DOCKER_CONFIG", "DBUS_SESSION_BUS_ADDRESS"}
+
+// commandEnv is the environment of a command: a fixed PATH and locale, the home of the user that runs the daemon (the
+// temporary directory when it has none, as a service user without a home), the variables of inheritedEnv that the
+// daemon has, and then what the owner wrote for that command, which wins.
+func commandEnv(extra map[string]string) []string {
+	env := []string{"PATH=" + pathOfCommands, "LC_ALL=C", "HOME=" + homeDir()}
+	for _, name := range inheritedEnv {
+		if value := os.Getenv(name); value != "" {
+			env = append(env, name+"="+value)
+		}
+	}
+	for k, v := range extra {
+		env = append(env, k+"="+v) // a later entry wins over an earlier one with the same name
+	}
+	return env
+}
+
+// homeDir is the home of the user that runs the daemon, when it exists.
+func homeDir() string {
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		if info, err := os.Stat(home); err == nil && info.IsDir() {
+			return home
+		}
+	}
+	return os.TempDir()
+}
+
 // HostExec runs the command on this host without a shell, in its own process group so that a timeout ends the
 // children too, with a clean environment and the output bounded.
 func HostExec(ctx context.Context, spec ExecSpec) ExecResult {
@@ -55,10 +86,7 @@ func HostExec(ctx context.Context, spec ExecSpec) ExecResult {
 
 	cmd := exec.Command(spec.Argv[0], spec.Argv[1:]...)
 	cmd.Dir = spec.Dir
-	cmd.Env = []string{"PATH=" + pathOfCommands, "LC_ALL=C", "HOME=" + os.TempDir()}
-	for k, v := range spec.Env {
-		cmd.Env = append(cmd.Env, k+"="+v)
-	}
+	cmd.Env = commandEnv(spec.Env)
 	ownProcessGroup(cmd)
 
 	out := &tailBuffer{max: maxOutput}
@@ -101,10 +129,7 @@ func HostStream(ctx context.Context, spec ExecSpec, onLine func(string)) ExecRes
 
 	cmd := exec.Command(spec.Argv[0], spec.Argv[1:]...)
 	cmd.Dir = spec.Dir
-	cmd.Env = []string{"PATH=" + pathOfCommands, "LC_ALL=C", "HOME=" + os.TempDir()}
-	for k, v := range spec.Env {
-		cmd.Env = append(cmd.Env, k+"="+v)
-	}
+	cmd.Env = commandEnv(spec.Env)
 	ownProcessGroup(cmd)
 
 	stdout, err := cmd.StdoutPipe()

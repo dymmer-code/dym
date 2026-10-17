@@ -139,11 +139,54 @@ logs:                          # the only files and units that can be read
 ```
 
 Names (services, containers, actions, units) are letters, digits and `. _ @ : -`, never starting with a dash. Commands
-are run as a list of arguments, never through a shell, with a clean environment, a time limit and a bounded output.
-The service runs as an unprivileged user. What changes a service or runs a privileged action is run as the `privilege`
-prefix followed by the command, with nothing added: for `systemctl: [nginx]` and a restart, `sudo -n systemctl restart nginx`.
-Give that user the right to run exactly those lines in `sudoers` (one rule per line, as sudo resolves the command:
-`dym ALL=(root) NOPASSWD: /usr/bin/systemctl restart nginx`) and nothing else.
+are run as a list of arguments, never through a shell, with a time limit and a bounded output. A command gets a small
+environment: a fixed `PATH`, the home of the user that runs the daemon, `USER`, `LOGNAME`, `XDG_RUNTIME_DIR`,
+`DOCKER_HOST`, `DOCKER_CONFIG` and `DBUS_SESSION_BUS_ADDRESS` when the daemon has them, and what the action itself
+declares under `env`. Nothing else of the environment of the daemon is passed on.
+
+#### Running it as a service
+
+`dym daemon` is one binary and it runs as **whoever starts it**: every action, log and service command is done as that
+user, with its files, its Docker and its `$HOME`. There is no `dym` user unless you make one. Pair once as that user
+(`dym auth daemon`), then run `dym daemon` under your init system. With systemd, as a service of the system:
+
+```ini
+# /etc/systemd/system/dym-daemon.service
+[Unit]
+Description=Dymmer daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=debian
+ExecStart=/usr/local/bin/dym daemon
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+or as a service of that user (`systemctl --user enable --now dym-daemon`, plus `loginctl enable-linger debian` to keep it
+after logging out). Without `--state` and `--config` a user other than root keeps both under `~/.config/dym/`.
+
+An action can call a script of that user, for example `~/bin/rebuild-queues.sh` with the `docker compose exec …` inside:
+
+```yaml
+# ~/.config/dym/daemon.yaml
+actions:
+  rebuild-queues:
+    command: [/home/debian/bin/rebuild-queues.sh]
+    timeout: 5m
+```
+
+In Dymmer the action is written with its name, `rebuild-queues`. The path is absolute because the command is not run
+through a shell; inside the script `$HOME` and everything else of a shell script works as usual.
+
+Changing services and running things as root is only for the commands that the user may run with `sudo -n`: what
+changes a service or runs a `privileged` action is run as the `privilege` prefix followed by the command, with nothing
+added (for `systemctl: [nginx]` and a restart, `sudo -n systemctl restart nginx`). Give the user the right to run exactly
+those lines in `sudoers` (`debian ALL=(root) NOPASSWD: /usr/bin/systemctl restart nginx`) and nothing else.
 
 ### `dym ext`
 
