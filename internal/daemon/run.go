@@ -7,6 +7,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"reflect"
+	"runtime"
 	"time"
 )
 
@@ -18,12 +19,17 @@ type RunOptions struct {
 	StatePath string
 	// Collect reads the inventory of the host; the default reads the machine.
 	Collect func() Inventory
+	// CollectStats takes a sample of how the host is doing; the default reads the machine. It says false when there
+	// is nothing to send (a system that is not supported).
+	CollectStats func() (Stats, bool)
 	// Logger receives what happens; the default discards it.
 	Logger *slog.Logger
 	// MinBackoff and MaxBackoff bound the wait between attempts to connect (1s and 60s by default).
 	MinBackoff, MaxBackoff time.Duration
 	// StableAfter is how long a connection has to last for the wait to start again from the minimum (60s).
 	StableAfter time.Duration
+	// StatsEvery is how often a sample is sent (5 minutes). Dymmer keeps one every quarter of an hour.
+	StatsEvery time.Duration
 	// InventoryEvery is how often the inventory is read again and sent if it changed (5 minutes).
 	InventoryEvery time.Duration
 	// PollPairing is how often it looks for the state while the host is not paired (5s).
@@ -34,6 +40,13 @@ func (o *RunOptions) defaults() {
 	if o.Collect == nil {
 		sys := HostSystem()
 		o.Collect = func() Inventory { return Collect(sys) }
+	}
+	if o.CollectStats == nil {
+		sys := HostStatsSystem(runtime.GOOS)
+		o.CollectStats = func() (Stats, bool) { return CollectStats(sys) }
+	}
+	if o.StatsEvery == 0 {
+		o.StatsEvery = 5 * time.Minute
 	}
 	if o.Logger == nil {
 		o.Logger = slog.New(slog.DiscardHandler)
@@ -119,9 +132,24 @@ func connectOnce(ctx context.Context, o RunOptions, state State) error {
 
 	ticker := time.NewTicker(o.InventoryEvery)
 	defer ticker.Stop()
+	statsTicker := time.NewTicker(o.StatsEvery)
+	defer statsTicker.Stop()
+
+	sendStats := func() {
+		stats, ok := o.CollectStats()
+		if !ok {
+			return
+		}
+		if _, err := conn.Push(ctx, "daemon:host", "stats", stats.Payload()); err != nil {
+			o.Logger.Warn("cannot send the statistics", "error", err)
+		}
+	}
+	sendStats()
 
 	for {
 		select {
+		case <-statsTicker.C:
+			sendStats()
 		case <-conn.Done():
 			return conn.Err()
 		case <-ctx.Done():

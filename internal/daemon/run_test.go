@@ -184,3 +184,55 @@ func TestJitterStaysWithinTwentyPercent(t *testing.T) {
 		}
 	}
 }
+
+func TestRunSendsStatisticsWhenItJoinsAndThenEveryInterval(t *testing.T) {
+	f := newFakeServer(t)
+	var samples atomic.Int32
+	var last atomic.Value
+	f.Handle = func(_ *fakeConn, _, event string, payload map[string]any) (string, map[string]any) {
+		if event == "stats" {
+			samples.Add(1)
+			last.Store(payload)
+		}
+		return "ok", map[string]any{}
+	}
+
+	var load atomic.Int64
+	load.Store(1)
+	runFor(t, RunOptions{
+		URL: f.URL(), StatePath: pairedState(t), StatsEvery: 20 * time.Millisecond,
+		Collect: func() Inventory { return Inventory{Hostname: "rowan"} },
+		CollectStats: func() (Stats, bool) {
+			return Stats{CPULoad: float64(load.Load()), MemoryUsage: 42, Uptime: 7}, true
+		},
+	})
+
+	eventually(t, "the first sample", func() bool { return samples.Load() >= 1 })
+	eventually(t, "more samples", func() bool { return samples.Load() >= 3 })
+	got, _ := last.Load().(map[string]any)
+	if got["memory_usage"] != float64(42) || got["uptime"] != float64(7) {
+		t.Errorf("sent %v", got)
+	}
+}
+
+func TestRunSendsNoStatisticsWhenThereIsNothingToSend(t *testing.T) {
+	f := newFakeServer(t)
+	var samples atomic.Int32
+	f.Handle = func(_ *fakeConn, _, event string, _ map[string]any) (string, map[string]any) {
+		if event == "stats" {
+			samples.Add(1)
+		}
+		return "ok", map[string]any{}
+	}
+	runFor(t, RunOptions{
+		URL: f.URL(), StatePath: pairedState(t), StatsEvery: 10 * time.Millisecond,
+		Collect:      func() Inventory { return Inventory{Hostname: "x"} },
+		CollectStats: func() (Stats, bool) { return Stats{}, false },
+	})
+
+	eventually(t, "the join", func() bool { return len(f.Joins()) == 1 })
+	time.Sleep(80 * time.Millisecond)
+	if samples.Load() != 0 {
+		t.Errorf("sent %d samples of a system that gives none", samples.Load())
+	}
+}
