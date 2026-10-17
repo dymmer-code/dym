@@ -1448,3 +1448,105 @@ extensions:
 	}
 }
 
+// runBearerExtension runs an extension against a server that is reached by an address other than the one of
+// BaseURL when the url says so: the base is 127.0.0.1 and the url may use localhost, which is another host name for
+// the same server. It returns the standard error and the Authorization header the server saw.
+func runBearerExtension(t *testing.T, yaml string, args ...string) (stderr, auth string) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth = r.Header.Get("Authorization")
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	t.Cleanup(srv.Close)
+
+	_, port, _ := strings.Cut(strings.TrimPrefix(srv.URL, "http://"), ":")
+	yaml = strings.ReplaceAll(yaml, "{{PORT}}", port)
+	path := writeExtensionsYAML(t, yaml)
+
+	errOut := new(bytes.Buffer)
+	cmd := NewRootCommand(Dependencies{
+		Out: new(bytes.Buffer), Err: errOut, BaseURL: srv.URL, ExtensionsFile: path,
+		Store: &fakeStore{token: "dymmer-account-token"}, Env: func(string) string { return "" },
+	})
+	cmd.SetArgs(append([]string{"ext"}, args...))
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	return errOut.String(), auth
+}
+
+func TestExtWarnsWhenTheDymmerTokenGoesToAnotherAddressButStillSendsIt(t *testing.T) {
+	stderr, auth := runBearerExtension(t, `
+extensions:
+  elsewhere:
+    url: "http://localhost:{{PORT}}/api"
+    auth: bearer
+`, "elsewhere")
+
+	if !strings.Contains(stderr, "warning") || !strings.Contains(stderr, "sends your Dymmer token to localhost") ||
+		!strings.Contains(stderr, "not the Dymmer API (127.0.0.1)") || !strings.Contains(stderr, "token:") {
+		t.Errorf("the warning is missing or unclear:\n%s", stderr)
+	}
+	if auth != "Bearer dymmer-account-token" {
+		t.Errorf("the call was changed by the warning: Authorization %q", auth)
+	}
+	if strings.Contains(stderr, "dymmer-account-token") {
+		t.Error("the warning shows the token")
+	}
+}
+
+func TestExtWarnsAlsoWhenTheTokenTemplateOnlyContainsTheDymmerToken(t *testing.T) {
+	stderr, auth := runBearerExtension(t, `
+extensions:
+  wrapped:
+    url: "http://localhost:{{PORT}}/api"
+    auth: bearer
+    token: "prefix-{{.DymmerToken}}"
+`, "wrapped")
+
+	if !strings.Contains(stderr, "sends your Dymmer token to localhost") {
+		t.Errorf("no warning:\n%s", stderr)
+	}
+	if auth != "Bearer prefix-dymmer-account-token" {
+		t.Errorf("Authorization %q", auth)
+	}
+}
+
+func TestExtDoesNotWarnForTheDymmerAddressOrForATokenOfItsOwn(t *testing.T) {
+	cases := map[string]string{
+		"the Dymmer address": `
+extensions:
+  home:
+    url: "{{.BaseURL}}/records"
+    auth: bearer
+`,
+		"the same host written again": `
+extensions:
+  home:
+    url: "http://127.0.0.1:{{PORT}}/records"
+    auth: bearer
+`,
+		"a token of its own, to another address": `
+extensions:
+  home:
+    url: "http://localhost:{{PORT}}/api"
+    auth: bearer
+    token: "{{.Args.token}}"
+    params: [token]
+`,
+		"no authentication, to another address": `
+extensions:
+  home:
+    url: "http://localhost:{{PORT}}/api"
+`,
+	}
+	for name, yaml := range cases {
+		args := []string{"home"}
+		if strings.Contains(yaml, "params: [token]") {
+			args = append(args, "their-own-token")
+		}
+		if stderr, _ := runBearerExtension(t, yaml, args...); stderr != "" {
+			t.Errorf("%s: unexpected output on the standard error:\n%s", name, stderr)
+		}
+	}
+}

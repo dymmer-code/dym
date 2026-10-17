@@ -108,8 +108,18 @@ you meant.
 `auth` is `none` (default) or `bearer`, which sends `Authorization: Bearer <token>`.
 
 > **Careful: the default token is your Dymmer token.** With `auth: bearer` and no `token:`, `dym` sends the token of your
-> Dymmer account. Use that only for Dymmer addresses (`{{.BaseURL}}/…`). **Never** use it for another service: you
-> would be handing your Dymmer token to a third party.
+> Dymmer account. That is right for Dymmer addresses (`{{.BaseURL}}/…`). For any other address it means handing the
+> token to whoever runs that service, who could then act as your account in Dymmer. `dym` does not stop you, because you
+> wrote the extension and may mean it, but it **warns you on the standard error every time**:
+>
+> ```
+> warning: extension "elsewhere" sends your Dymmer token to api.example.com, which is not the Dymmer API (dymmer.com).
+>          Whoever runs that service can use the token to act as your Dymmer account. If the service needs a token,
+>          give it its own with `token:` in the extension instead of the default.
+> ```
+>
+> The call still goes ahead and the token is never shown. An extension with its own `token:` (below) or with
+> `auth: none` never warns.
 
 For a different service, give the token yourself with `token`, which is also a template:
 

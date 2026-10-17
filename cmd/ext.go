@@ -487,6 +487,7 @@ func doExtensionRequest(ctx context.Context, deps Dependencies, ext *extension, 
 			return nil, fmt.Errorf("extension %q: rendering token: %w", ext.Name, err)
 		}
 		httpReq.Header.Set("Authorization", "Bearer "+tokenStr)
+		warnIfDymmerTokenLeavesDymmer(deps, ext, reqCtx, urlStr)
 	}
 
 	httpClient := &http.Client{Timeout: 30 * time.Second}
@@ -567,4 +568,41 @@ func writeExtensionRows(cmd *cobra.Command, ext *extension, decoded any, filters
 	default:
 		return writeSelectedTable(cmd.OutOrStdout(), rows, fields, "No results found.")
 	}
+}
+
+// dymmerTokenProbe stands in for the token while a template is checked for whether it uses it.
+const dymmerTokenProbe = "\x00dymmer-token-probe\x00"
+
+// warnIfDymmerTokenLeavesDymmer tells the user, on the standard error, when an extension is about to send the Dymmer
+// token to an address that is not the Dymmer API. It does not stop the call: the user wrote the extension and may mean
+// it. But sending the token of the account to another service lets whoever runs it act as that account in Dymmer, and
+// that is worth saying every time. An extension that gives its own token (token: "{{.Args.token}}") never warns.
+func warnIfDymmerTokenLeavesDymmer(deps Dependencies, ext *extension, reqCtx requestContext, requestURL string) {
+	probeCtx := reqCtx
+	probeCtx.DymmerToken = dymmerTokenProbe
+	probed, err := renderTemplate(ext.TokenTemplate, probeCtx)
+	if err != nil || !strings.Contains(probed, dymmerTokenProbe) {
+		return // the token is not the one of Dymmer
+	}
+
+	target, err := url.Parse(requestURL)
+	if err != nil {
+		return
+	}
+	base, err := url.Parse(reqCtx.BaseURL)
+	if err != nil || base.Hostname() == "" {
+		return
+	}
+	if strings.EqualFold(target.Hostname(), base.Hostname()) {
+		return
+	}
+
+	out := deps.Err
+	if out == nil {
+		out = os.Stderr
+	}
+	fmt.Fprintf(out, "warning: extension %q sends your Dymmer token to %s, which is not the Dymmer API (%s).\n"+
+		"         Whoever runs that service can use the token to act as your Dymmer account. If the service needs a token,\n"+
+		"         give it its own with `token:` in the extension instead of the default.\n",
+		ext.Name, target.Hostname(), base.Hostname())
 }

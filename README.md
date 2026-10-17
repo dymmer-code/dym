@@ -151,7 +151,7 @@ Field names are the API's real JSON field names, not always the same as the CLI'
 
 ## Extensions
 
-A step-by-step guide, with what it can and cannot do, is in [docs/extensions.md](docs/extensions.md).
+A step-by-step guide, with what it can and cannot do, is in [docs/extensions.md](docs/extensions.md). With `auth: bearer` and no `token`, the token sent is your Dymmer token: `dym` warns on the standard error whenever the address is not the Dymmer API.
 
 `dym` ships with **zero** extensions by default. `dym ext` is a generic escape hatch: a YAML config file where you declare arbitrary HTTP calls against Dymmer (or Dymmer-adjacent) endpoints `dym` doesn't have a built-in command for, and `dym` turns each declared entry into a real subcommand — `dym ext <name>` — with no code changes required.
 
