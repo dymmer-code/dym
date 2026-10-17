@@ -20,18 +20,18 @@ const (
 // operationRunner answers the "exec" orders that Dymmer pushes: it runs the operation that was named, if it is one of
 // ours, and sends back what it printed. Nothing else is ever run.
 type operationRunner struct {
-	sys     StatsSystem
+	env     OpEnv
 	conn    *Conn
 	logger  *slog.Logger
 	running chan struct{}
 }
 
 func newOperationRunner(o RunOptions, conn *Conn) *operationRunner {
-	sys := HostStatsSystem(currentGOOS)
+	env := HostOpEnv(currentGOOS, o.ConfigPath)
 	if o.Operations != nil {
-		sys = *o.Operations
+		env = *o.Operations
 	}
-	return &operationRunner{sys: sys, conn: conn, logger: o.Logger, running: make(chan struct{}, maxRunning)}
+	return &operationRunner{env: env, conn: conn, logger: o.Logger, running: make(chan struct{}, maxRunning)}
 }
 
 // handle takes an "exec" order: {"id": "...", "name": "cpu_usage_percent.sh", "args": []}. The answer goes back as an
@@ -64,7 +64,7 @@ func (r *operationRunner) handle(ctx context.Context, order map[string]any) {
 		defer cancel()
 
 		done := make(chan Result, 1)
-		go func() { done <- RunOperation(r.sys, name, args) }()
+		go func() { done <- RunOperation(r.env, name, args) }()
 
 		select {
 		case result := <-done:

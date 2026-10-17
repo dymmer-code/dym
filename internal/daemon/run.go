@@ -22,8 +22,11 @@ type RunOptions struct {
 	// CollectStats takes a sample of how the host is doing; the default reads the machine. It says false when there
 	// is nothing to send (a system that is not supported).
 	CollectStats func() (Stats, bool)
-	// Stats is the machine the operations read; the default is the host itself.
-	Operations *StatsSystem
+	// Operations is what the operations use (the machine they read, the way to run a command, the configuration of the
+	// owner); the default is the host itself.
+	Operations *OpEnv
+	// ConfigPath is the configuration of the owner (see Config); without it, the default of the user that runs.
+	ConfigPath string
 	// Logger receives what happens; the default discards it.
 	Logger *slog.Logger
 	// MinBackoff and MaxBackoff bound the wait between attempts to connect (1s and 60s by default).

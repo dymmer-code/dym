@@ -9,9 +9,12 @@ import (
 )
 
 // Result is what an operation answers: the shape the scripts of Dymmer print, so that Dymmer reads it as it always did.
+// Output and Service are for the operations on services, whose scripts also printed them.
 type Result struct {
 	Status  string // "OK" or "FAIL"
 	Message string
+	Output  string // "OK" (running), "NO" (stopped), "ERROR" or "UNKNOWN"
+	Service string
 }
 
 func ok(message string) Result   { return Result{Status: "OK", Message: message} }
@@ -19,13 +22,44 @@ func fail(message string) Result { return Result{Status: "FAIL", Message: messag
 
 // Payload is the result as the map that goes in a channel message.
 func (r Result) Payload() map[string]any {
-	return map[string]any{"status": r.Status, "message": r.Message}
+	m := map[string]any{"status": r.Status, "message": r.Message}
+	if r.Output != "" {
+		m["output"] = r.Output
+	}
+	if r.Service != "" {
+		m["service"] = r.Service
+	}
+	return m
+}
+
+// OpEnv is what an operation can use: the machine it reads, a way to run a command, and the configuration of the owner.
+type OpEnv struct {
+	StatsSystem
+	Exec   ExecFunc
+	Config func() (Config, error)
+}
+
+// config reads the configuration of the owner; an error in it is a failure of the operation that needs it.
+func (e OpEnv) config() (Config, error) {
+	if e.Config == nil {
+		return Config{}, nil
+	}
+	return e.Config()
+}
+
+// HostOpEnv is the host itself, with the configuration read from path.
+func HostOpEnv(goos, configPath string) OpEnv {
+	return OpEnv{
+		StatsSystem: HostStatsSystem(goos),
+		Exec:        HostExec,
+		Config:      func() (Config, error) { return LoadConfig(configPath) },
+	}
 }
 
 // Operation is something Dymmer can ask this host to do, by name. It is a fixed implementation that lives in this
 // program for each system: Dymmer sends a name and arguments, never a script or a command line, and an operation
 // that is not here is refused. Arguments are checked by the operation before it does anything.
-type Operation func(sys StatsSystem, args []string) Result
+type Operation func(env OpEnv, args []string) Result
 
 // Operations are the operations that this host answers. They are named like the scripts Dymmer used to send, so that
 // a host reached by SSH and one reached through the daemon are asked the same way.
@@ -43,6 +77,19 @@ func Operations() map[string]Operation {
 		"network_receive_bytes_total.sh":  noArgs(networkReceived),
 		"network_transmit_bytes_total.sh": noArgs(networkTransmitted),
 		"system_uptime_seconds.sh":        noArgs(uptime),
+
+		// Services, by name; what changes one is only what the configuration of the owner allows.
+		"systemctl.sh":      serviceOperation(systemctlManager),
+		"service.sh":        serviceOperation(serviceManager),
+		"init_d.sh":         serviceOperation(initDManager),
+		"docker.sh":         serviceOperation(dockerManager),
+		"pm2.sh":            serviceOperation(pm2Manager),
+		"supervisord.sh":    serviceOperation(supervisordManager),
+		"docker_compose.sh": composeOperation,
+
+		// What the owner wrote, by name, and what the owner allowed to be read.
+		"action.sh":              actionOperation,
+		"log_recent_matching.sh": logOperation,
 	}
 }
 
@@ -58,12 +105,12 @@ func OperationNames() []string {
 
 // RunOperation runs the operation with that name. A name that is not one of ours, or arguments that the operation does
 // not take, are a failure and nothing is run.
-func RunOperation(sys StatsSystem, name string, args []string) Result {
+func RunOperation(env OpEnv, name string, args []string) Result {
 	op, known := Operations()[name]
 	if !known {
 		return fail("unknown operation")
 	}
-	return op(sys, args)
+	return op(env, args)
 }
 
 // reading is what one system gives for one operation: the number as text, or false when this system cannot say.
@@ -72,14 +119,14 @@ type reading func(sys StatsSystem) (string, bool)
 // noArgs makes an operation of a measurement: it takes no arguments and answers with the number, or with a failure
 // that says the system cannot measure it (never with a made-up zero).
 func noArgs(read reading) Operation {
-	return func(sys StatsSystem, args []string) Result {
+	return func(env OpEnv, args []string) Result {
 		if len(args) != 0 {
 			return fail("this operation takes no arguments")
 		}
-		if value, found := read(sys); found {
+		if value, found := read(env.StatsSystem); found {
 			return ok(value)
 		}
-		return fail("not available on " + sys.GOOS)
+		return fail("not available on " + env.GOOS)
 	}
 }
 

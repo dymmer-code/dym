@@ -42,7 +42,9 @@ func linuxOps() StatsSystem {
 	return sys
 }
 
-func ask(sys StatsSystem, name string, args ...string) Result { return RunOperation(sys, name, args) }
+func ask(sys StatsSystem, name string, args ...string) Result {
+	return RunOperation(OpEnv{StatsSystem: sys}, name, args)
+}
 
 func TestLinuxOperations(t *testing.T) {
 	cases := map[string]string{
@@ -87,9 +89,16 @@ func TestLinuxMemoryCachedAndDiskUsed(t *testing.T) {
 	}
 }
 
+// metricOperations are the operations that measure: they take no arguments.
+var metricOperations = []string{
+	"cpu_time_seconds_total.sh", "cpu_usage_percent.sh", "disk_io_duration_seconds.sh", "disk_io_reads_total.sh",
+	"disk_io_writes_total.sh", "disk_used_bytes.sh", "memory_cached_bytes.sh", "memory_used_bytes.sh",
+	"network_active_connections.sh", "network_receive_bytes_total.sh", "network_transmit_bytes_total.sh", "system_uptime_seconds.sh",
+}
+
 func TestAnOperationTakesNoArguments(t *testing.T) {
 	sys := linuxOps()
-	for name := range Operations() {
+	for _, name := range metricOperations {
 		if got := ask(sys, name, "; touch /tmp/x"); got.Status != "FAIL" || !strings.Contains(got.Message, "no arguments") {
 			t.Errorf("%s accepted an argument: %+v", name, got)
 		}
@@ -101,7 +110,7 @@ func TestAnUnknownOperationIsRefusedAndNothingIsRun(t *testing.T) {
 	sys := linuxOps()
 	sys.Run = func(string, ...string) (string, error) { ran = true; return "", nil }
 
-	for _, name := range []string{"", "rm -rf /", "../../bin/sh", "docker.sh", "info.sh", "CPU_USAGE_PERCENT.SH", "cpu_usage_percent"} {
+	for _, name := range []string{"", "rm -rf /", "../../bin/sh", "info.sh", "stats.sh", "CPU_USAGE_PERCENT.SH", "cpu_usage_percent"} {
 		if got := ask(sys, name); got.Status != "FAIL" || got.Message != "unknown operation" {
 			t.Errorf("%q: %+v", name, got)
 		}
@@ -179,7 +188,7 @@ func TestFreeBSDDoesNotInventWhatItCannotMeasure(t *testing.T) {
 
 func TestOperationNamesAreTheScriptsDymmerAsksFor(t *testing.T) {
 	names := OperationNames()
-	if !sort.StringsAreSorted(names) || len(names) != 12 {
+	if !sort.StringsAreSorted(names) || len(names) != 21 {
 		t.Errorf("names %v", names)
 	}
 	for _, name := range names {

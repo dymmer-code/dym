@@ -94,6 +94,54 @@ Content flags accepted by `create` and `update` (only the ones you set are sent 
 
 `--env` defaults to `dev`. `--deployment` is optional. `--output`/`-o` accepts `table` (default, a two-column KEY/VALUE table), `json` (an array of secret entries), `csv`/`tsv` (see below), or `dotenv` (the raw `.env`-formatted body). Secrets are written to stdout only; errors are written to stderr only. `--filter`/`--select` cannot be combined with `--output dotenv` (that output is the server's raw text, so field-level filtering/projection has no meaning there); using either with `--output dotenv` is an error, checked before any API call. `--filter`/`--select` combine fine with `--output csv`/`--output tsv`, same as with `table`/`json`.
 
+### `dym daemon`
+
+Keeps a host connected to Dymmer without SSH: the host opens the connection, so it works behind NAT or a firewall.
+Pair the host once with `dym auth daemon` (it shows a PIN; type it in Dymmer, in **Hosts → Add with dym** or in the
+edition of a host that already exists), then run `dym daemon` as a service.
+
+The daemon does not accept commands or scripts. It tells Dymmer that the host is alive and what it is (system, CPU,
+memory, addresses), sends its statistics every five minutes, and answers the **operations** that Dymmer asks for by
+name. Each operation is a fixed implementation inside this program, for Linux and FreeBSD, and an operation that is
+not in it is refused. Dymmer never sends a script or a command line.
+
+| Operation | Needs the configuration file? |
+|---|---|
+| Measurements: `cpu_usage_percent.sh`, `cpu_time_seconds_total.sh`, `memory_used_bytes.sh`, `memory_cached_bytes.sh`, `disk_used_bytes.sh`, `disk_io_reads_total.sh`, `disk_io_writes_total.sh`, `disk_io_duration_seconds.sh`, `network_receive_bytes_total.sh`, `network_transmit_bytes_total.sh`, `network_active_connections.sh`, `system_uptime_seconds.sh` | No. They only read. |
+| Status of a service: `systemctl.sh`, `service.sh`, `init_d.sh`, `docker.sh`, `pm2.sh`, `supervisord.sh`, `docker_compose.sh` (with `status`) | No, for any valid name. For `docker_compose.sh` the project must be declared. |
+| Start, stop, restart or reload a service | Yes: only what is listed under `services` or `compose`. |
+| `action.sh <name>` | Yes: only the actions declared under `actions`. |
+| `log_recent_matching.sh` | Yes: only the files and units declared under `logs`. |
+
+What changes the host or reads more than measurements is written by the owner of the host in
+`/etc/dym/daemon.yaml` (for root; `--config` changes it). The file is read again for every order, so a change needs no
+restart. Without the file nothing that changes the host can be asked. A file that has an error is refused as a whole.
+
+```yaml
+privilege: [sudo, -n]          # put before the commands that change something (optional)
+services:                      # what Dymmer may start, stop, restart or reload
+  systemctl: [nginx, myapp]
+  docker: [web]
+compose:                       # docker compose projects; every operation on one needs its entry
+  - path: /srv/app
+    services: [web, worker]
+actions:                       # what an action of a project, or a command of a deployment, may run
+  deploy-site:
+    command: [/usr/local/bin/deploy-site, --prod]
+    dir: /srv/site
+    env: {MODE: prod}
+    timeout: 5m                # one minute by default, half an hour at most
+    privileged: true           # run with the `privilege` prefix
+logs:                          # the only files and units that can be read
+  files: [/var/log/nginx/access.log]
+  units: [nginx]
+```
+
+Names (services, containers, actions, units) are letters, digits and `. _ @ : -`, never starting with a dash. Commands
+are run as a list of arguments, never through a shell, with a clean environment, a time limit and a bounded output.
+The service runs as an unprivileged user; to change services or run privileged actions give that user the right to run
+exactly those commands with `sudo -n` in `sudoers`.
+
 ### `dym ext`
 
 | Command | Description |

@@ -23,10 +23,12 @@ type RunDaemonFunc func(ctx context.Context, o daemon.RunOptions) error
 type daemonFlags struct {
 	server string
 	state  string
+	config string
 }
 
 func (f *daemonFlags) add(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&f.server, "server", "", "address of Dymmer (default $DYM_SERVER or "+defaultServer+")")
+	cmd.Flags().StringVar(&f.config, "config", "", "file where the owner of the host writes what Dymmer may change and read (default /etc/dym/daemon.yaml for root, the user's config otherwise)")
 	cmd.Flags().StringVar(&f.state, "state", "", "file where the pairing is kept (default /var/lib/dym/daemon.json for root, the user's config otherwise)")
 }
 
@@ -123,8 +125,10 @@ func newDaemonCommand(deps Dependencies) *cobra.Command {
 		Use:   "daemon",
 		Short: "Keep this host connected to Dymmer (no SSH needed)",
 		Long: "Keep this host connected to Dymmer. The host opens the connection, so it works behind NAT or a firewall.\n\n" +
-			"Dymmer shows the host as on while this runs. It does not accept commands: it only tells Dymmer that the host\n" +
-			"is alive and what it is. Pair the host first with `dym auth daemon`.",
+			"Dymmer shows the host as on while this runs. It does not accept commands or scripts: it tells Dymmer that the host\n" +
+			"is alive and what it is, and answers the operations that Dymmer asks by name (measurements, the status of a\n" +
+			"service, and what the owner declared in the configuration file: services that may be changed, named actions and\n" +
+			"readable logs). Pair the host first with `dym auth daemon`.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			socket, statePath, err := flags.resolve(deps)
@@ -136,7 +140,13 @@ func newDaemonCommand(deps Dependencies) *cobra.Command {
 			defer stop()
 
 			logger := slog.New(slog.NewTextHandler(cmd.ErrOrStderr(), nil))
-			return deps.runDaemon()(ctx, daemon.RunOptions{URL: socket, StatePath: statePath, Logger: logger})
+			configPath := flags.config
+			if configPath == "" {
+				if configPath, err = daemon.DefaultConfigPath(); err != nil {
+					return err
+				}
+			}
+			return deps.runDaemon()(ctx, daemon.RunOptions{URL: socket, StatePath: statePath, ConfigPath: configPath, Logger: logger})
 		},
 	}
 	flags.add(cmd)

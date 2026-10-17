@@ -272,7 +272,7 @@ func runWithOperations(t *testing.T, sys StatsSystem) (*fakeServer, *orders) {
 		return "ok", map[string]any{}
 	}
 	runFor(t, RunOptions{
-		URL: f.URL(), StatePath: pairedState(t), Operations: &sys,
+		URL: f.URL(), StatePath: pairedState(t), Operations: &OpEnv{StatsSystem: sys},
 		Collect:      func() Inventory { return Inventory{Hostname: "rowan"} },
 		CollectStats: func() (Stats, bool) { return Stats{}, false },
 	})
