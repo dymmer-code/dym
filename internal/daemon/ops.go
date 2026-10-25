@@ -75,6 +75,7 @@ func Operations() map[string]Operation {
 		"disk_used_bytes.sh":              noArgs(diskUsed),
 		"memory_cached_bytes.sh":          noArgs(memoryCached),
 		"memory_used_bytes.sh":            noArgs(memoryUsed),
+		"memory_used_percent.sh":          noArgs(memoryUsedPercent),
 		"network_active_connections.sh":   noArgs(networkConnections),
 		"network_receive_bytes_total.sh":  noArgs(networkReceived),
 		"network_transmit_bytes_total.sh": noArgs(networkTransmitted),
@@ -351,22 +352,52 @@ func memoryCached(sys StatsSystem) (string, bool) {
 }
 
 func memoryUsed(sys StatsSystem) (string, bool) {
+	used, _, ok := memoryAmounts(sys)
+	return strconv.FormatInt(used, 10), ok
+}
+
+func memoryUsedPercent(sys StatsSystem) (string, bool) {
+	used, total, ok := memoryAmounts(sys)
+	if !ok {
+		return "", false
+	}
+	return strconv.FormatFloat(float64(used)*100/float64(total), 'f', 2, 64), true
+}
+
+// Both memory metrics use the same available-memory definition and one snapshot.
+func memoryAmounts(sys StatsSystem) (int64, int64, bool) {
 	switch sys.GOOS {
 	case "linux":
 		data, err := sys.ReadFile("/proc/meminfo")
-		if err != nil {
-			return "", false
+		if err != nil || !strings.Contains(string(data), "MemAvailable:") {
+			return 0, 0, false
 		}
 		total, available := meminfo(string(data), "MemTotal"), meminfo(string(data), "MemAvailable")
-		if total == 0 || available == 0 || available > total {
-			return "", false
+		if total <= 0 || available < 0 || available > total {
+			return 0, 0, false
 		}
-		return strconv.FormatInt(total-available, 10), true
+		return total - available, total, true
 	case "freebsd":
-		stats, found := collectFreeBSDStats(sys)
-		return strconv.FormatInt(stats.MemoryUsage, 10), found && stats.MemoryUsage > 0
+		values := make([]int64, 4)
+		for i, name := range []string{"hw.physmem", "hw.pagesize", "vm.stats.vm.v_free_count", "vm.stats.vm.v_inactive_count"} {
+			out, err := sys.Run("sysctl", "-n", name)
+			if err != nil {
+				return 0, 0, false
+			}
+			value, err := strconv.ParseInt(strings.TrimSpace(out), 10, 64)
+			if err != nil || value < 0 {
+				return 0, 0, false
+			}
+			values[i] = value
+		}
+		total, pageSize := values[0], values[1]
+		available := (values[2] + values[3]) * pageSize
+		if total <= 0 || pageSize <= 0 || available > total {
+			return 0, 0, false
+		}
+		return total - available, total, true
 	}
-	return "", false
+	return 0, 0, false
 }
 
 func networkConnections(sys StatsSystem) (string, bool) {

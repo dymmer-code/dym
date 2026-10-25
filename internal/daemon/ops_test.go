@@ -48,8 +48,9 @@ func ask(sys StatsSystem, name string, args ...string) Result {
 
 func TestLinuxOperations(t *testing.T) {
 	cases := map[string]string{
-		"cpu_time_seconds_total.sh":       "10",         // (100+100+700+100) jiffies, 100 per second
-		"memory_cached_bytes.sh":          "0",          // set below
+		"cpu_time_seconds_total.sh":       "10", // (100+100+700+100) jiffies, 100 per second
+		"memory_cached_bytes.sh":          "0",  // set below
+		"memory_used_percent.sh":          "24.71",
 		"memory_used_bytes.sh":            "1024000000", // (4046480-3046480) KiB
 		"network_active_connections.sh":   "3",          // two in tcp, one in tcp6; the listener is not one
 		"network_receive_bytes_total.sh":  "1500",       // loopback does not count
@@ -92,7 +93,7 @@ func TestLinuxMemoryCachedAndDiskUsed(t *testing.T) {
 // metricOperations are the operations that measure: they take no arguments.
 var metricOperations = []string{
 	"cpu_time_seconds_total.sh", "cpu_usage_percent.sh", "disk_io_duration_seconds.sh", "disk_io_reads_total.sh",
-	"disk_io_writes_total.sh", "disk_used_bytes.sh", "memory_cached_bytes.sh", "memory_used_bytes.sh",
+	"disk_io_writes_total.sh", "disk_used_bytes.sh", "memory_cached_bytes.sh", "memory_used_bytes.sh", "memory_used_percent.sh",
 	"network_active_connections.sh", "network_receive_bytes_total.sh", "network_transmit_bytes_total.sh", "system_uptime_seconds.sh",
 }
 
@@ -161,6 +162,7 @@ func TestFreeBSDOperations(t *testing.T) {
 	want := map[string]string{
 		"cpu_usage_percent.sh":            "80.77", // total +260 ticks, idle +50
 		"cpu_time_seconds_total.sh":       "7",     // 905 ticks at 128 per second
+		"memory_used_percent.sh":          "28.47",
 		"memory_used_bytes.sh":            "2445934592",
 		"network_active_connections.sh":   "2",
 		"network_receive_bytes_total.sh":  "500100",
@@ -188,7 +190,7 @@ func TestFreeBSDDoesNotInventWhatItCannotMeasure(t *testing.T) {
 
 func TestOperationNamesAreTheScriptsDymmerAsksFor(t *testing.T) {
 	names := OperationNames()
-	if !sort.StringsAreSorted(names) || len(names) != 22 {
+	if !sort.StringsAreSorted(names) || len(names) != 23 {
 		t.Errorf("names %v", names)
 	}
 	for _, name := range names {
@@ -224,5 +226,13 @@ func TestTheRunnerWaitsForAnActionAsLongAsItMayTakeAndForTheRestOnlyAMoment(t *t
 	// An action that is allowed more time than the quick operations must not be cut by the quick limit.
 	if timeoutFor("action.sh") <= operationTimeout {
 		t.Error("the limit of an action is not longer than the limit of a measurement")
+	}
+}
+
+func TestMemoryPercentUnavailable(t *testing.T) {
+	sys := linuxOps()
+	sys.ReadFile = func(string) ([]byte, error) { return []byte("MemTotal: 0 kB\nMemAvailable: 0 kB\n"), nil }
+	if got := ask(sys, "memory_used_percent.sh"); got.Status != "FAIL" {
+		t.Fatalf("invalid total produced a percentage: %+v", got)
 	}
 }
