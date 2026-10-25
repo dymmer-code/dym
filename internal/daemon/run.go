@@ -13,6 +13,7 @@ import (
 
 // RunOptions says how the daemon runs.
 type RunOptions struct {
+	metricWindows *metricWindows
 	// URL is the websocket endpoint of Dymmer's daemon socket.
 	URL string
 	// StatePath is where the pairing is kept.
@@ -78,6 +79,10 @@ func (o *RunOptions) defaults() {
 // that is down is not hammered by every host at once, and the wait starts again after a connection that held.
 func Run(ctx context.Context, o RunOptions) error {
 	o.defaults()
+	if o.metricWindows == nil && (runtime.GOOS == "linux" || runtime.GOOS == "freebsd") {
+		o.metricWindows = &metricWindows{}
+		go o.metricWindows.collect(ctx, HostStatsSystem(runtime.GOOS))
+	}
 	wait := o.MinBackoff
 	warnedUnpaired := false
 
@@ -132,10 +137,18 @@ func connectOnce(ctx context.Context, o RunOptions, state State) error {
 	sent := o.Collect()
 	// It tells Dymmer which operations it answers, so that Dymmer asks only for those.
 	hello := map[string]any{"inventory": sent.Payload(), "operations": OperationNames()}
-	if _, err := conn.Join(ctx, "daemon:host", hello); err != nil {
+	hello["metric_windows"] = o.metricWindows != nil
+	joined, err := conn.Join(ctx, "daemon:host", hello)
+	if err != nil {
 		return err
 	}
 	o.Logger.Info("connected to Dymmer", "host_id", state.HostID)
+	windows := o.metricWindows
+	if joined["metric_windows"] != true {
+		windows = nil
+	}
+	windowTicker := time.NewTicker(time.Second)
+	defer windowTicker.Stop()
 
 	ticker := time.NewTicker(o.InventoryEvery)
 	defer ticker.Stop()
@@ -168,6 +181,15 @@ func connectOnce(ctx context.Context, o RunOptions, state State) error {
 				ops.startStream(connCtx, event.Payload)
 			case "stream_stop":
 				ops.stopStream(event.Payload)
+			}
+		case <-windowTicker.C:
+			if windows != nil {
+				for payload := windows.first(); payload != nil; payload = windows.first() {
+					if _, err := conn.Push(ctx, "daemon:host", "metric_window", payload); err != nil {
+						return err
+					}
+					windows.ack(payload["ended_at"])
+				}
 			}
 		case <-statsTicker.C:
 			sendStats()
