@@ -48,7 +48,7 @@ func followLog(ctx context.Context, env OpEnv, args []string, emit func(string))
 		if env.Stream == nil {
 			return fail("The journal cannot be followed.")
 		}
-		r := env.Stream(ctx, ExecSpec{Argv: []string{"journalctl", "-f", "--no-pager", "--output=json", "--output-fields=MESSAGE,__REALTIME_TIMESTAMP,PRIORITY", "--unit=" + source.target}}, onLine)
+		r := env.Stream(ctx, ExecSpec{Argv: source.journalArgs("-f")}, onLine)
 		if ctx.Err() != nil {
 			return ok("")
 		}

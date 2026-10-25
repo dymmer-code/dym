@@ -19,21 +19,22 @@ const (
 
 // logSource is what a log operation was asked to read, once it was checked against the configuration of the owner.
 type logSource struct {
-	kind   string // "file" or "journal"
-	target string
-	match  *regexp.Regexp // nil without a filter
+	kind     string // "file" or "journal"
+	target   string
+	severity string
+	match    *regexp.Regexp // nil without a filter
 }
 
-// parseLog checks the arguments of `<file|journal> <path or unit> [filter]`: the type, that the path or the unit is one the
+// parseLog checks the arguments of `<file|journal> <path or unit> [filter] [min_severity]`: the type, that the path or the unit is one the
 // owner declared, and that the filter is an expression (RE2, which cannot take exponential time).
 func parseLog(env OpEnv, args []string) (logSource, *Result) {
-	if len(args) < 2 || len(args) > 3 {
+	if len(args) < 2 || len(args) > 4 {
 		r := fail("Missing parameters.")
 		return logSource{}, &r
 	}
 	source := logSource{kind: args[0], target: args[1]}
 
-	if len(args) == 3 && args[2] != "" {
+	if len(args) >= 3 && args[2] != "" {
 		if len(args[2]) > maxFilter {
 			r := fail("The filter is too long.")
 			return logSource{}, &r
@@ -44,6 +45,14 @@ func parseLog(env OpEnv, args []string) (logSource, *Result) {
 			return logSource{}, &r
 		}
 		source.match = match
+	}
+
+	if len(args) == 4 && args[3] != "" {
+		if source.kind != "journal" || len(args[3]) != 1 || args[3][0] < '0' || args[3][0] > '7' {
+			r := fail("Invalid journal severity.")
+			return logSource{}, &r
+		}
+		source.severity = args[3]
 	}
 
 	config, err := env.config()
@@ -83,7 +92,7 @@ func (l logSource) matches(line string) bool {
 	return l.match == nil || l.match.MatchString(line)
 }
 
-// logOperation is `log_recent_matching.sh <file|journal> <path or unit> [filter]`: the last lines, among the last 500,
+// logOperation is `log_recent_matching.sh <file|journal> <path or unit> [filter] [min_severity]`: the last lines, among the last 500,
 // that match the filter. Only the files and the units that the owner declared can be read, whatever is asked.
 func logOperation(env OpEnv, args []string) Result {
 	source, refused := parseLog(env, args)
@@ -99,7 +108,7 @@ func logOperation(env OpEnv, args []string) Result {
 		}
 		window = lines
 	} else {
-		r := env.run(ExecSpec{Argv: []string{"journalctl", "-n", "500", "--no-pager", "--output=json", "--output-fields=MESSAGE,__REALTIME_TIMESTAMP,PRIORITY", "--unit=" + source.target}, Timeout: logTimeout})
+		r := env.run(ExecSpec{Argv: source.journalArgs("-n", "500"), Timeout: logTimeout})
 		if r.Err != nil || r.ExitCode != 0 {
 			return fail("The journal cannot be read.")
 		}
@@ -149,4 +158,13 @@ func splitLines(text string) []string {
 		return nil
 	}
 	return strings.Split(text, "\n")
+}
+
+func (l logSource) journalArgs(mode ...string) []string {
+	args := append([]string{"journalctl"}, mode...)
+	args = append(args, "--no-pager", "--output=json", "--output-fields=MESSAGE,__REALTIME_TIMESTAMP,PRIORITY", "--unit="+l.target)
+	if l.severity != "" {
+		args = append(args, "--priority="+l.severity)
+	}
+	return args
 }
