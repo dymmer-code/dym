@@ -311,7 +311,7 @@ func TestLogsAreOnlyWhatIsDeclared(t *testing.T) {
 
 	config := Config{Logs: LogsConfig{Files: []string{logPath}, Units: []string{"nginx"}}}
 	env, f := envWith(config, map[string]ExecResult{
-		"journalctl -n 500 --no-pager --output=cat --unit=nginx": okResult("a\nb error\nc\nd error"),
+		"journalctl -n 500 --no-pager --output=json --output-fields=MESSAGE,__REALTIME_TIMESTAMP,PRIORITY --unit=nginx": okResult(`{"MESSAGE":"a"}` + "\n" + `{"MESSAGE":"b error","__REALTIME_TIMESTAMP":"1792931361123456","PRIORITY":"3"}` + "\n" + `{"MESSAGE":"c"}` + "\n" + `{"MESSAGE":"d error","PRIORITY":"4"}`),
 	})
 
 	last := RunOperation(env, "log_recent_matching.sh", []string{"file", logPath})
@@ -323,7 +323,7 @@ func TestLogsAreOnlyWhatIsDeclared(t *testing.T) {
 	if matching.Message != "line 400 error\nline 500 error\nline 600 error\nline 700 error\nline 800 error" {
 		t.Errorf("matching: %q", matching.Message)
 	}
-	if r := RunOperation(env, "log_recent_matching.sh", []string{"journal", "nginx", "error"}); r.Message != "b error\nd error" {
+	if r := RunOperation(env, "log_recent_matching.sh", []string{"journal", "nginx", "^[bd] error$"}); r.Message != `{"MESSAGE":"b error","__REALTIME_TIMESTAMP":"1792931361123456","PRIORITY":"3"}`+"\n"+`{"MESSAGE":"d error","PRIORITY":"4"}` {
 		t.Errorf("journal: %+v", r)
 	}
 

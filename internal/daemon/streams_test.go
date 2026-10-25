@@ -158,18 +158,20 @@ func TestFollowingTheJournalUsesTheDeclaredUnitAndFilters(t *testing.T) {
 	env := followEnv()
 	env.Stream = func(ctx context.Context, spec ExecSpec, onLine func(string)) ExecResult {
 		ran = spec
-		for _, line := range []string{"started", "ERROR boom", "finished"} {
+		for _, line := range []string{`{"MESSAGE":"started"}`, `{"MESSAGE":"ERROR boom","__REALTIME_TIMESTAMP":"1792931361123456","PRIORITY":"3"}`, `{"MESSAGE":"finished"}`} {
 			onLine(line)
 		}
 		<-ctx.Done()
 		return ExecResult{ExitCode: -1, Err: ctx.Err()}
 	}
 
-	c, stop := startFollow(t, env, "journal", "nginx", "ERROR")
-	c.waitFor(t, "the line that matches", func(l []string) bool { return len(l) == 1 && l[0] == "ERROR boom" })
+	c, stop := startFollow(t, env, "journal", "nginx", "^ERROR")
+	c.waitFor(t, "the line that matches", func(l []string) bool {
+		return len(l) == 1 && l[0] == `{"MESSAGE":"ERROR boom","__REALTIME_TIMESTAMP":"1792931361123456","PRIORITY":"3"}`
+	})
 	stop()
 
-	if strings.Join(ran.Argv, " ") != "journalctl -f --no-pager --output=cat --unit=nginx" {
+	if strings.Join(ran.Argv, " ") != "journalctl -f --no-pager --output=json --output-fields=MESSAGE,__REALTIME_TIMESTAMP,PRIORITY --unit=nginx" {
 		t.Errorf("ran %v", ran.Argv)
 	}
 }

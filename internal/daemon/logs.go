@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -69,7 +70,18 @@ func parseLog(env OpEnv, args []string) (logSource, *Result) {
 	return source, nil
 }
 
-func (l logSource) matches(line string) bool { return l.match == nil || l.match.MatchString(line) }
+func (l logSource) matches(line string) bool {
+	if l.kind == "journal" {
+		var entry struct {
+			Message string `json:"MESSAGE"`
+		}
+		if json.Unmarshal([]byte(line), &entry) != nil {
+			return false
+		}
+		line = entry.Message
+	}
+	return l.match == nil || l.match.MatchString(line)
+}
 
 // logOperation is `log_recent_matching.sh <file|journal> <path or unit> [filter]`: the last lines, among the last 500,
 // that match the filter. Only the files and the units that the owner declared can be read, whatever is asked.
@@ -87,7 +99,7 @@ func logOperation(env OpEnv, args []string) Result {
 		}
 		window = lines
 	} else {
-		r := env.run(ExecSpec{Argv: []string{"journalctl", "-n", "500", "--no-pager", "--output=cat", "--unit=" + source.target}, Timeout: logTimeout})
+		r := env.run(ExecSpec{Argv: []string{"journalctl", "-n", "500", "--no-pager", "--output=json", "--output-fields=MESSAGE,__REALTIME_TIMESTAMP,PRIORITY", "--unit=" + source.target}, Timeout: logTimeout})
 		if r.Err != nil || r.ExitCode != 0 {
 			return fail("The journal cannot be read.")
 		}
