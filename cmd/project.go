@@ -8,17 +8,17 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// newProjectCommand builds the "dym project <project> secrets get" entry
+// newProjectCommand builds the "dym project <project>" entry
 // point. Like newDomainCommand, cobra cannot natively route a dynamic
 // positional token (the project name) in the middle of a command path, so
 // this command disables its own flag parsing, takes every remaining
 // argument itself, peels off the project name, and executes a small nested
-// command tree (secrets) against the rest — closing over the project name
+// command tree (apps and secrets) against the rest — closing over the project name
 // and deps.
 func newProjectCommand(deps Dependencies) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:                "project <project> secrets get",
-		Short:              "Manage secrets for a project",
+		Use:                "project <project> <apps|secrets>",
+		Short:              "Manage apps and secrets for a project",
 		DisableFlagParsing: true,
 		Args:               cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -33,7 +33,7 @@ func newProjectCommand(deps Dependencies) *cobra.Command {
 	return cmd
 }
 
-// newProjectResourceTree builds the secrets command tree for a single,
+// newProjectResourceTree builds the apps and secrets command tree for a single,
 // already-known project name. Its own error/usage printing is silenced so
 // the single outer "dym" root command prints any resulting error exactly
 // once.
@@ -45,7 +45,7 @@ func newProjectResourceTree(project string, deps Dependencies) *cobra.Command {
 		SilenceUsage:      true,
 		SilenceErrors:     true,
 	}
-	root.AddCommand(newSecretsCommand(project, deps))
+	root.AddCommand(newSecretsCommand(project, deps), newProjectAppsCommand(project, deps))
 	return root
 }
 
@@ -122,4 +122,53 @@ func newSecretsGetCommand(project string, deps Dependencies) *cobra.Command {
 	cmd.Flags().StringVarP(&output, "output", "o", "table", `Output format: "table", "json", "csv", "tsv", or "dotenv"`)
 	addFilterAndSelectFlags(cmd, &filterArgs, &selectFields)
 	return cmd
+}
+
+func newProjectAppsCommand(project string, deps Dependencies) *cobra.Command {
+	var env, deployment, output string
+	apps := &cobra.Command{Use: "apps", Short: "List apps and their hosts"}
+	list := &cobra.Command{
+		Use: "list", Short: "List apps and destinations in a project environment", Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			switch output {
+			case "table", "json", "csv", "tsv":
+			default:
+				return errors.New(`--output must be "table", "json", "csv", or "tsv"`)
+			}
+			client, err := resolveAPI(deps)
+			if err != nil {
+				return err
+			}
+			deployments, err := client.ListDeployments(cmd.Context(), project, env, deployment)
+			if err != nil {
+				return wrapAuthError(err)
+			}
+			if output == "json" {
+				return json.NewEncoder(cmd.OutOrStdout()).Encode(deployments)
+			}
+			rows := []map[string]any{}
+			for _, app := range deployments {
+				if len(app.Hosts) == 0 {
+					rows = append(rows, map[string]any{"app": app.Name, "host": "", "status": "draft", "ports": ""})
+				}
+				for _, host := range app.Hosts {
+					rows = append(rows, map[string]any{"app": app.Name, "host": host.Name, "status": host.Status, "ports": host.Ports})
+				}
+			}
+			fields := []string{"app", "host", "status", "ports"}
+			if output == "csv" || output == "tsv" {
+				comma := ','
+				if output == "tsv" {
+					comma = '\t'
+				}
+				return writeSelectedDelimited(cmd.OutOrStdout(), rows, fields, comma)
+			}
+			return writeSelectedTable(cmd.OutOrStdout(), rows, fields, "No apps found.")
+		},
+	}
+	list.Flags().StringVar(&env, "env", "dev", "Project environment")
+	list.Flags().StringVar(&deployment, "deployment", "", "Filter by app name")
+	list.Flags().StringVarP(&output, "output", "o", "table", "Output format: table, json, csv, or tsv")
+	apps.AddCommand(list)
+	return apps
 }

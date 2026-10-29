@@ -17,6 +17,7 @@ import (
 // and (in a later task) project commands depend on. Tests inject a fake
 // implementation; production code resolves a real *api.Client lazily.
 type APIClient interface {
+	ListDeployments(ctx context.Context, project, env, deployment string) ([]api.Deployment, error)
 	ListRecords(ctx context.Context, domain, recordType string) ([]api.Record, error)
 	CreateRecord(ctx context.Context, domain string, input api.RecordInput) (*api.Record, error)
 	UpdateRecord(ctx context.Context, domain, id string, input api.RecordInput) (*api.Record, error)

@@ -244,3 +244,36 @@ func (c *Client) GetSecrets(ctx context.Context, project, env, deployment, forma
 	}
 	return &SecretsResult{Entries: entries}, nil
 }
+
+// Deployment keeps shared app metadata separate from each host's configuration.
+type Deployment struct {
+	ID      string           `json:"id"`
+	Name    string           `json:"name"`
+	AppType string           `json:"app_type"`
+	Hosts   []DeploymentHost `json:"hosts"`
+}
+
+type DeploymentHost struct {
+	ID           string   `json:"id"`
+	HostID       string   `json:"host_id"`
+	Name         string   `json:"name"`
+	Status       string   `json:"status"`
+	Ports        []int    `json:"ports"`
+	WorkingPath  string   `json:"working_path"`
+	ExecPath     string   `json:"exec_path"`
+	CommandType  string   `json:"command_type"`
+	ServiceParam string   `json:"service_param"`
+	Operations   []string `json:"operations"`
+}
+
+func (c *Client) ListDeployments(ctx context.Context, project, env, deployment string) ([]Deployment, error) {
+	query := url.Values{"project": {project}, "env": {env}}
+	if deployment != "" {
+		query.Set("deployment", deployment)
+	}
+	apps := []Deployment{}
+	if err := c.do(ctx, http.MethodGet, "/hosts/deployments?"+query.Encode(), nil, &apps); err != nil {
+		return nil, err
+	}
+	return apps, nil
+}

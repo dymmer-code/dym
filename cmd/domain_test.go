@@ -947,3 +947,7 @@ func (f *fakeAPI) ListWebBuckets(_ context.Context) ([]api.WebBucket, error) {
 	}
 	return f.webBuckets, nil
 }
+
+func (f *fakeAPI) ListDeployments(_ context.Context, project, env, deployment string) ([]api.Deployment, error) {
+	return []api.Deployment{}, nil
+}

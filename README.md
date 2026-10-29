@@ -91,6 +91,10 @@ Content flags accepted by `create` and `update` (only the ones you set are sent 
 | --- | --- |
 | `dym domain <domain> forwardings list [--filter field=value]... [--select fields] [-o table\|json\|csv\|tsv]` | List mail forwardings |
 
+### `dym project <project> apps`
+
+`dym project <project> apps list --env <env> [--deployment <name>] [-o table|json|csv|tsv]` lists apps and their hosts. The environment defaults to `dev`. Table/CSV/TSV output has one row per host with its app, status and ports; JSON retains the app and its nested `hosts` configuration. Apps without hosts appear as drafts. Requires the `deployment:read` API token scope and access to the project. Commands and secrets are never included; shared secrets remain available through `secrets get`.
+
 ### `dym project <project> secrets`
 
 | Command | Description |
