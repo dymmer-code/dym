@@ -79,15 +79,30 @@ func parseLog(env OpEnv, args []string) (logSource, *Result) {
 	return source, nil
 }
 
-// accept says whether a line passes the filter and gives the line as it has to be sent on.
+// ansiEscape matches the terminal control sequences that a logger writes when it believes it has a terminal: colors and
+// other CSI sequences, and OSC ones (a title, a link) that end with BEL or ESC \.
+var ansiEscape = regexp.MustCompile(`\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)`)
+
+// stripANSI takes the terminal control sequences out of a text. Nothing reads them in a log, and they are what makes
+// journald write a message as an array of bytes.
+func stripANSI(text string) string {
+	if !strings.Contains(text, "\x1b") {
+		return text
+	}
+	return ansiEscape.ReplaceAllString(text, "")
+}
+
+// accept says whether a line passes the filter and gives the line as it has to be sent on, without the color codes of
+// the logger: a filter is matched against the text a person reads.
 //
 // A line of the journal is JSON whose MESSAGE is text, but journald writes MESSAGE as an array of bytes when it holds
 // anything that is not printable (the color codes of a logger are enough) or is very long. Such a line used to be
 // dropped, so a log that had nothing but colored lines answered "OK" with no lines at all. It is sent on with MESSAGE as
 // text (a byte that is not valid UTF-8 becomes U+FFFD), so whoever reads it needs not know. Every other line is sent on
-// exactly as it came.
+// as it came, but for the color codes.
 func (l logSource) accept(line string) (string, bool) {
 	if l.kind != "journal" {
+		line = stripANSI(line)
 		return line, l.match == nil || l.match.MatchString(line)
 	}
 	var entry map[string]json.RawMessage
@@ -95,16 +110,23 @@ func (l logSource) accept(line string) (string, bool) {
 		return line, false
 	}
 	var message string
-	if raw, found := entry["MESSAGE"]; found && json.Unmarshal(raw, &message) != nil {
-		bytes, valid := messageBytes(raw)
-		if !valid {
-			return line, false
+	if raw, found := entry["MESSAGE"]; found {
+		isText := json.Unmarshal(raw, &message) == nil
+		if !isText {
+			bytes, valid := messageBytes(raw)
+			if !valid {
+				return line, false
+			}
+			message = strings.ToValidUTF8(string(bytes), "�")
 		}
-		message = strings.ToValidUTF8(string(bytes), "�")
-		text, _ := json.Marshal(message)
-		entry["MESSAGE"] = text
-		if rewritten, err := json.Marshal(entry); err == nil {
-			line = string(rewritten)
+		clean := stripANSI(message)
+		if !isText || clean != message {
+			message = clean
+			text, _ := json.Marshal(message)
+			entry["MESSAGE"] = text
+			if rewritten, err := json.Marshal(entry); err == nil {
+				line = string(rewritten)
+			}
 		}
 	}
 	return line, l.match == nil || l.match.MatchString(message)

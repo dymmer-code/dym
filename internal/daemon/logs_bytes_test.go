@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"encoding/json"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -39,7 +40,7 @@ func recentJournal(t *testing.T, output string, filter string) Result {
 	return RunOperation(env, "log_recent_matching.sh", []string{"journal", "myapp", filter})
 }
 
-// A log with nothing but colored lines used to answer OK with no lines at all.
+// A log with nothing but colored lines used to answer OK with no lines at all; now it answers with them, in plain text.
 func TestJournalLinesWithByteArrayMessageAreKept(t *testing.T) {
 	colored := "2026-10-29T08:52:44.004Z \x1b[33mwarn\x1b[39m: - null GET /.env 404 0.2 -"
 	r := recentJournal(t, journalBytes(colored)+"\n"+journalBytes("2026-10-29T08:52:45.000Z \x1b[32minfo\x1b[39m: started"), "")
@@ -50,8 +51,9 @@ func TestJournalLinesWithByteArrayMessageAreKept(t *testing.T) {
 	if len(lines) != 2 {
 		t.Fatalf("expected the 2 lines, got %d: %q", len(lines), r.Message)
 	}
-	if got := journalMessage(t, lines[0]); got != colored {
-		t.Fatalf("the message was changed: %q", got)
+	// The color codes are not sent on: nobody reads them in a log.
+	if got, want := journalMessage(t, lines[0]), "2026-10-29T08:52:44.004Z warn: - null GET /.env 404 0.2 -"; got != want {
+		t.Fatalf("the message is %q, want %q", got, want)
 	}
 	var entry map[string]any
 	_ = json.Unmarshal([]byte(lines[0]), &entry)
@@ -90,5 +92,37 @@ func TestJournalByteArrayWithAnImpossibleByteIsDropped(t *testing.T) {
 	r := recentJournal(t, journalBytes("", 'a', 300)+"\n"+journalBytes("", 'o', 'k'), "")
 	if r.Status != "OK" || journalMessage(t, r.Message) != "ok" {
 		t.Fatalf("%+v", r)
+	}
+}
+
+func TestJournalTextMessageLosesItsColorCodesToo(t *testing.T) {
+	line := `{"MESSAGE":"\u001b[33mwarn\u001b[39m: plain","PRIORITY":"4"}`
+	r := recentJournal(t, line, "^warn")
+	if got := journalMessage(t, r.Message); got != "warn: plain" {
+		t.Fatalf("%q (%+v)", got, r)
+	}
+}
+
+func TestStripANSI(t *testing.T) {
+	for in, want := range map[string]string{
+		"plain":                                    "plain",
+		"\x1b[33mwarn\x1b[39m: x":                  "warn: x",
+		"\x1b[1;31;40mbold\x1b[0m":                 "bold",
+		"\x1b[2K\x1b[1Gline":                       "line",
+		"\x1b]0;title\x07text":                     "text",
+		"\x1b]8;;http://a\x1b\\link\x1b]8;;\x1b\\": "link",
+		"50% [done] \x1b[0m":                       "50% [done] ",
+	} {
+		if got := stripANSI(in); got != want {
+			t.Errorf("stripANSI(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestLogFileLinesLoseTheirColorCodes(t *testing.T) {
+	source := logSource{kind: "file", match: regexp.MustCompile("^warn")}
+	line, passes := source.accept("\x1b[33mwarn\x1b[39m: from a file")
+	if !passes || line != "warn: from a file" {
+		t.Fatalf("%q %v", line, passes)
 	}
 }
