@@ -39,7 +39,7 @@ func followLog(ctx context.Context, env OpEnv, args []string, emit func(string))
 	out := newBatcher(ctx, emit)
 	defer out.stop()
 	onLine := func(line string) {
-		if source.matches(line) {
+		if line, passes := source.accept(line); passes {
 			out.add(line)
 		}
 	}

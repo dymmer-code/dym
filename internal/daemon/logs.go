@@ -79,17 +79,51 @@ func parseLog(env OpEnv, args []string) (logSource, *Result) {
 	return source, nil
 }
 
-func (l logSource) matches(line string) bool {
-	if l.kind == "journal" {
-		var entry struct {
-			Message string `json:"MESSAGE"`
-		}
-		if json.Unmarshal([]byte(line), &entry) != nil {
-			return false
-		}
-		line = entry.Message
+// accept says whether a line passes the filter and gives the line as it has to be sent on.
+//
+// A line of the journal is JSON whose MESSAGE is text, but journald writes MESSAGE as an array of bytes when it holds
+// anything that is not printable (the color codes of a logger are enough) or is very long. Such a line used to be
+// dropped, so a log that had nothing but colored lines answered "OK" with no lines at all. It is sent on with MESSAGE as
+// text (a byte that is not valid UTF-8 becomes U+FFFD), so whoever reads it needs not know. Every other line is sent on
+// exactly as it came.
+func (l logSource) accept(line string) (string, bool) {
+	if l.kind != "journal" {
+		return line, l.match == nil || l.match.MatchString(line)
 	}
-	return l.match == nil || l.match.MatchString(line)
+	var entry map[string]json.RawMessage
+	if json.Unmarshal([]byte(line), &entry) != nil {
+		return line, false
+	}
+	var message string
+	if raw, found := entry["MESSAGE"]; found && json.Unmarshal(raw, &message) != nil {
+		bytes, valid := messageBytes(raw)
+		if !valid {
+			return line, false
+		}
+		message = strings.ToValidUTF8(string(bytes), "�")
+		text, _ := json.Marshal(message)
+		entry["MESSAGE"] = text
+		if rewritten, err := json.Marshal(entry); err == nil {
+			line = string(rewritten)
+		}
+	}
+	return line, l.match == nil || l.match.MatchString(message)
+}
+
+// messageBytes reads a MESSAGE that journald wrote as an array of numbers from 0 to 255.
+func messageBytes(raw json.RawMessage) ([]byte, bool) {
+	var numbers []int
+	if json.Unmarshal(raw, &numbers) != nil {
+		return nil, false
+	}
+	bytes := make([]byte, len(numbers))
+	for i, n := range numbers {
+		if n < 0 || n > 255 {
+			return nil, false
+		}
+		bytes[i] = byte(n)
+	}
+	return bytes, true
 }
 
 // logOperation is `log_recent_matching.sh <file|journal> <path or unit> [filter] [min_severity]`: the last lines, among the last 500,
@@ -117,7 +151,7 @@ func logOperation(env OpEnv, args []string) Result {
 
 	var kept []string
 	for _, line := range window {
-		if source.matches(line) {
+		if line, passes := source.accept(line); passes {
 			kept = append(kept, line)
 		}
 	}
