@@ -311,3 +311,39 @@ dym ext mailbox-lines example.com --to /etc/postfix/virtual_mailbox_maps --appen
 ```
 
 All examples are illustrative — write your own `extensions.yaml` for whatever internal or Dymmer-adjacent endpoints your workflow needs; `dym` has no bundled extensions.
+
+### Register a local dymploy builder
+
+After pairing the machine with `dym auth daemon`, an administrator who owns the
+host can register its builder profile:
+
+```sh
+dym host builder register --config /etc/dymploy/config.yaml --token-owner dymploy
+```
+
+Authenticate dym normally with a token containing `builder:register`. This token
+is only needed for registration; dymploy receives an independent profile secret.
+The command requires the paired daemon state (`--state` overrides its location)
+and the source IP must already be in that host's inventory. Use `--server` for a
+non-default Dymmer instance; HTTPS is required except on loopback for local tests.
+
+The command reads a standalone YAML file, exports only the profile name, API URL
+and repository policy, saves the returned secret with mode `0600`, and adds the
+`control_plane` URL, builder ID and token file. Other local fields remain in the
+file. The profile name defaults to `dymploy` (`--name`), and `--api-url` overrides
+the address derived from `listen`. Local execution limits and credential paths
+are never sent to Dymmer. Policy rules must satisfy Dymmer's exact-match contract.
+
+The secret defaults to `<config>.dymmer-token`, or the existing absolute
+`control_plane.token_file`. It inherits the configuration owner unless
+`--token-owner` selects the service account (requires permission to change owner).
+Run with permission to read the daemon state and update those files. Neither the
+profile secret nor the registration token is printed. Reload/restart dymploy
+explicitly after registration; this command does not restart services.
+
+A repeat with the saved secret confirms the existing profile without rotating
+its credential or changing its configuration in Dymmer. If updating the YAML
+fails after saving the secret, rerun the same command. If the response is lost
+or the secret cannot be saved, recover through explicit administrator credential
+rotation; an existing profile never silently issues a replacement secret.
+App acceptance in dymploy and GitHub App access remain separate requirements.
