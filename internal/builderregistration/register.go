@@ -4,6 +4,8 @@ package builderregistration
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,7 +23,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-type Options struct{ Config, Server, HostID, HostSecret, Token, Name, APIURL, TokenOwner string }
+type Options struct{ Config, Server, HostID, HostSecret, Token, Name, APIURL, TokenOwner, CAFile string }
 type Result struct {
 	BuilderID string `json:"builder_id"`
 	Secret    string `json:"secret"`
@@ -166,9 +168,25 @@ func Register(ctx context.Context, o Options) (Result, error) {
 		req.Header.Set("X-Dym-Builder-Secret", existing)
 	}
 	client := &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	if o.CAFile != "" {
+		cert, e := os.ReadFile(o.CAFile)
+		if e != nil {
+			return Result{}, e
+		}
+		roots, e := x509.SystemCertPool()
+		if e != nil {
+			return Result{}, e
+		}
+		if !roots.AppendCertsFromPEM(cert) {
+			return Result{}, errors.New("invalid CA certificate")
+		}
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		transport.TLSClientConfig = &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}
+		client.Transport = transport
+	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return Result{}, errors.New("registration connection failed; no local configuration changed")
+		return Result{}, fmt.Errorf("registration connection failed; no local configuration changed: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {

@@ -326,6 +326,8 @@ is only needed for registration; dymploy receives an independent profile secret.
 The command requires the paired daemon state (`--state` overrides its location)
 and the source IP must already be in that host's inventory. Use `--server` for a
 non-default Dymmer instance; HTTPS is required except on loopback for local tests.
+For a private CA, pass `--ca-file /path/to/ca.pem`; certificate and hostname
+verification remain enabled.
 
 The command reads a standalone YAML file, exports only the profile name, API URL
 and repository policy, saves the returned secret with mode `0600`, and adds the

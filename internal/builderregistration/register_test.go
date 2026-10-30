@@ -3,6 +3,7 @@ package builderregistration
 import (
 	"context"
 	"encoding/json"
+	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -96,5 +97,25 @@ func TestRejectsSymlinkAndMalformedConfigurationBeforeNetwork(t *testing.T) {
 		if _, err := Register(context.Background(), Options{Config: path, Server: "http://127.0.0.1"}); err == nil {
 			t.Fatal(data)
 		}
+	}
+}
+
+func TestPrivateCAIsExplicitAndTLSRemainsVerified(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	os.WriteFile(path, []byte("listen: 127.0.0.1:8080\n"), 0600)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{"builder_id": "tls-builder", "secret": strings.Repeat("b", 43)})
+	}))
+	defer server.Close()
+	options := Options{Config: path, Server: server.URL}
+	if _, err := Register(context.Background(), options); err == nil {
+		t.Fatal("accepted untrusted certificate")
+	}
+	ca := filepath.Join(dir, "ca.pem")
+	os.WriteFile(ca, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw}), 0600)
+	options.CAFile = ca
+	if _, err := Register(context.Background(), options); err != nil {
+		t.Fatal(err)
 	}
 }
