@@ -296,33 +296,39 @@ func allDigits(s string) bool {
 }
 
 func diskUsed(sys StatsSystem) (string, bool) {
+	used, _, ok := diskAmounts(sys)
+	return strconv.FormatInt(used, 10), ok
+}
+
+// diskAmounts gives the space in use and the size of the file systems that diskUsed adds up.
+func diskAmounts(sys StatsSystem) (used, size int64, ok bool) {
 	switch sys.GOOS {
 	case "linux":
-		return linuxDiskUsed(sys)
+		return linuxDiskAmounts(sys)
 	case "freebsd":
 		out, err := sys.Run("df", "-k")
 		if err != nil {
-			return "", false
+			return 0, 0, false
 		}
-		var sum int64
 		lines := strings.Split(out, "\n")
 		for _, line := range lines[min(1, len(lines)):] {
 			if fields := strings.Fields(line); len(fields) >= 6 {
-				sum += atoi64(fields[2]) * 1024
+				size += atoi64(fields[1]) * 1024
+				used += atoi64(fields[2]) * 1024
 			}
 		}
-		return strconv.FormatInt(sum, 10), true
+		return used, size, true
 	}
-	return "", false
+	return 0, 0, false
 }
 
-// linuxDiskUsed adds the space in use of every mounted file system that has a size, once for each device, as df does.
-func linuxDiskUsed(sys StatsSystem) (string, bool) {
+// linuxDiskAmounts adds the space in use and the size of every mounted file system that has a size, once for each
+// device, as df does.
+func linuxDiskAmounts(sys StatsSystem) (used, size int64, ok bool) {
 	mounts, err := sys.ReadFile("/proc/mounts")
 	if err != nil || sys.Statfs == nil {
-		return "", false
+		return 0, 0, false
 	}
-	var sum int64
 	seen := map[string]bool{}
 	for _, line := range strings.Split(string(mounts), "\n") {
 		fields := strings.Fields(line)
@@ -334,9 +340,10 @@ func linuxDiskUsed(sys StatsSystem) (string, bool) {
 			continue
 		}
 		seen[fields[0]] = true
-		sum += int64(total - free)
+		used += int64(total - free)
+		size += int64(total)
 	}
-	return strconv.FormatInt(sum, 10), true
+	return used, size, true
 }
 
 func memoryCached(sys StatsSystem) (string, bool) {

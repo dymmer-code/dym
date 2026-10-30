@@ -204,3 +204,14 @@ func TestParseFreeBSDBootAndLoad(t *testing.T) {
 		t.Errorf("load %v %v", load, ok)
 	}
 }
+
+func TestDiskAndMemoryAmountsGiveTheirSize(t *testing.T) {
+	sys := linuxStatsSystem()
+	used, size, ok := diskAmounts(sys)
+	if !ok || used != 600*1024+4000 || size != 1000*1024+5000+100 {
+		t.Errorf("disk %d of %d (%v)", used, size, ok)
+	}
+	if _, total, ok := memoryAmounts(sys); !ok || total != 4046480*1024 {
+		t.Errorf("memory total %d (%v)", total, ok)
+	}
+}

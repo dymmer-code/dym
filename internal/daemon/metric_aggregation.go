@@ -61,8 +61,10 @@ var windowReaders = map[string]metricReader{
 }
 
 type metricSnapshot struct {
-	at          time.Time
-	values      map[string]float64
+	at     time.Time
+	values map[string]float64
+	// capacities is the most a gauge can reach (memory installed, size of the disks), by reader name.
+	capacities  map[string]float64
 	total, idle int64
 	cpuOK       bool
 }
@@ -102,12 +104,25 @@ func readMetricSnapshot(sys StatsSystem) metricSnapshot {
 			}
 		}
 	}
+	s.capacities = readCapacities(sys)
 	if sys.GOOS == "linux" {
 		s.total, s.idle, s.cpuOK = linuxCPU(sys)
 	} else if sys.GOOS == "freebsd" {
 		s.total, s.idle, s.cpuOK = freebsdCPU(sys)
 	}
 	return s
+}
+
+func readCapacities(sys StatsSystem) map[string]float64 {
+	capacities := map[string]float64{}
+	if _, total, ok := memoryAmounts(sys); ok && total > 0 {
+		capacities["memory_used_bytes.sh"] = float64(total)
+		capacities["memory_cached_bytes.sh"] = float64(total)
+	}
+	if _, size, ok := diskAmounts(sys); ok && size > 0 {
+		capacities["disk_used_bytes.sh"] = float64(size)
+	}
+	return capacities
 }
 
 type metricSummary struct {
@@ -132,10 +147,12 @@ type metricAccumulator struct {
 	start     time.Time
 	previous  metricSnapshot
 	summaries map[string]*metricSummary
+	// capacities are the latest ones read: a disk can grow in the middle of a window.
+	capacities map[string]float64
 }
 
 func newMetricAccumulator(first metricSnapshot) *metricAccumulator {
-	return &metricAccumulator{start: first.at, previous: first, summaries: map[string]*metricSummary{}}
+	return &metricAccumulator{start: first.at, previous: first, summaries: map[string]*metricSummary{}, capacities: first.capacities}
 }
 func (a *metricAccumulator) sample(s metricSnapshot) {
 	seconds := s.at.Sub(a.previous.at).Seconds()
@@ -159,6 +176,9 @@ func (a *metricAccumulator) sample(s metricSnapshot) {
 			}
 		}
 	}
+	if len(s.capacities) > 0 {
+		a.capacities = s.capacities
+	}
 	a.previous = s
 }
 func (a *metricAccumulator) add(name string, v, weight, seconds float64) {
@@ -172,7 +192,11 @@ func (a *metricAccumulator) add(name string, v, weight, seconds float64) {
 func (a *metricAccumulator) finish() map[string]any {
 	metrics := map[string]any{}
 	for name, s := range a.summaries {
-		metrics[name] = map[string]any{"mean": s.sum / s.weight, "min": s.min, "max": s.max, "samples": s.count, "covered_seconds": s.seconds}
+		summary := map[string]any{"mean": s.sum / s.weight, "min": s.min, "max": s.max, "samples": s.count, "covered_seconds": s.seconds}
+		if capacity := a.capacities[name]; capacity > 0 {
+			summary["capacity"] = capacity
+		}
+		metrics[name] = summary
 	}
 	return map[string]any{"started_at": a.start.UTC().Format(time.RFC3339Nano), "ended_at": a.previous.at.UTC().Format(time.RFC3339Nano), "metrics": metrics}
 }

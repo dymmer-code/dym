@@ -123,3 +123,21 @@ func TestLinuxSnapshotSharesReadsAndDoesNotSpawnCommandsOrSleep(t *testing.T) {
 		}
 	}
 }
+
+func TestWindowCarriesTheCapacityOfWhatHasOne(t *testing.T) {
+	with := func(sec int, size float64) metricSnapshot {
+		s := snap(sec, 10, 100, 0, 0)
+		s.values["disk_used_bytes.sh"] = 40
+		s.capacities = map[string]float64{"disk_used_bytes.sh": size}
+		return s
+	}
+	a := newMetricAccumulator(with(0, 100))
+	a.sample(with(10, 120)) // the disk grew
+	metrics := a.finish()["metrics"].(map[string]any)
+	if got := metrics["disk_used_bytes.sh"].(map[string]any)["capacity"]; got != 120.0 {
+		t.Fatalf("capacity: %v", got)
+	}
+	if _, ok := metrics["memory_used_percent.sh"].(map[string]any)["capacity"]; ok {
+		t.Fatal("a metric without capacity reported one")
+	}
+}
