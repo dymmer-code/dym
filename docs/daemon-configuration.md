@@ -247,3 +247,9 @@ logs:
 - Commands are lists of arguments; nothing goes through a shell unless you wrote a script that does.
 - `privilege` plus an exact `sudoers` line is the way to run something as root; never give the daemon's user general
   `sudo`.
+
+## Application memory observations
+
+The `memory` allowlist grants app-memory reads independently of service control.
+See [Application memory and required permissions](app-memory.md) for systemd,
+Docker/Compose, standalone Linux and FreeBSD examples and validation commands.

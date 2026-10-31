@@ -168,3 +168,6 @@ home): give `--state` and `--config` explicitly, as the examples in [Running it 
 
 Stop and disable the service, delete the state file, and in Dymmer delete the host or change how it is reached (SSH or
 disabled). Deleting the host or changing its way of reaching makes Dymmer refuse the old secret.
+
+Application-level memory can be inspected with `dym app memory` and the fixed
+`app_memory_v1.sh` operation. See [the collector and permissions guide](app-memory.md).

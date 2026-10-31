@@ -34,6 +34,7 @@ import (
 //	  files: [/var/log/nginx/access.log]
 //	  units: [nginx]
 type Config struct {
+	Memory    []MemoryTarget          `yaml:"memory"`
 	Privilege []string                `yaml:"privilege"`
 	Services  map[string][]string     `yaml:"services"`
 	Compose   []ComposeProject        `yaml:"compose"`
@@ -108,6 +109,17 @@ func LoadConfig(path string) (Config, error) {
 
 // Validate checks every entry. The first thing wrong is reported.
 func (c Config) Validate() error {
+	seenMemory := map[string]bool{}
+	for _, target := range c.Memory {
+		if err := target.validate(); err != nil {
+			return err
+		}
+		key := target.Manager + "\x00" + target.Service + "\x00" + target.Path
+		if seenMemory[key] {
+			return fmt.Errorf("memory: duplicate target")
+		}
+		seenMemory[key] = true
+	}
 	for manager, names := range c.Services {
 		if !includes(serviceManagers, manager) {
 			return fmt.Errorf("services: %q is not a manager (%v)", manager, serviceManagers)

@@ -85,6 +85,7 @@ func NewRootCommand(deps Dependencies) *cobra.Command {
 	cmd.AddCommand(newWebCommand(deps))
 	cmd.AddCommand(newExtCommand(deps))
 	cmd.AddCommand(newDaemonCommand(deps))
+	cmd.AddCommand(newAppCommand())
 	cmd.AddCommand(newHostCommand(deps))
 	return cmd
 }

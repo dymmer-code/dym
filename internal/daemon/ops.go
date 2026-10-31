@@ -67,6 +67,7 @@ type Operation func(env OpEnv, args []string) Result
 // a host reached by SSH and one reached through the daemon are asked the same way.
 func Operations() map[string]Operation {
 	return map[string]Operation{
+		"app_memory_v1.sh":                appMemoryOperation,
 		"cpu_time_seconds_total.sh":       noArgs(cpuTime),
 		"cpu_usage_percent.sh":            noArgs(cpuUsage),
 		"disk_io_duration_seconds.sh":     noArgs(diskIODuration),
