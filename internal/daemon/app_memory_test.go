@@ -101,12 +101,15 @@ func TestFreeBSDProcessMemoryExcludesSupervisor(t *testing.T) {
 	}
 	e.Exec = func(_ context.Context, s ExecSpec) ExecResult {
 		if s.Argv[0] == "sysctl" {
+			if s.Argv[2] != "kern.boottime" {
+				return ExecResult{ExitCode: 1}
+			}
 			return okResult("{ sec = 1234, usec = 42 }")
 		}
-		if strings.Join(s.Argv, " ") != "ps -ax -o pid= -o ppid= -o uid= -o rss= -o lstart= -o comm=" {
+		if strings.Join(s.Argv, " ") != "ps -ax -o pid= -o ppid= -o uid= -o rss= -o time= -o lstart= -o comm=" {
 			t.Fatalf("non-portable ps command: %v", s.Argv)
 		}
-		return okResult("0 0 0 0 Sat Oct 31 13:00:00 2026 kernel\n1112 1 0 2516 Sat Oct 31 13:10:00 2026 daemon\n1114 1112 1002 15416 Sat Oct 31 13:10:00 2026 /usr/local/sbin/dnsauth\n1115 1114 1002 100 Sat Oct 31 13:10:00 2026 worker\n")
+		return okResult("0 0 0 0 0:00.00 Sat Oct 31 13:00:00 2026 kernel\n1112 1 0 2516 0:01.00 Sat Oct 31 13:10:00 2026 daemon\n1114 1112 1002 15416 0:10.50 Sat Oct 31 13:10:00 2026 /usr/local/sbin/dnsauth\n1115 1114 1002 100 0:00.50 Sat Oct 31 13:10:00 2026 worker\n")
 	}
 	r := report(t, RunOperation(e, "app_memory_v1.sh", []string{"service", "dnsauth", ""}))
 	if r.Status != "ok" || len(r.Instances) != 1 {

@@ -207,11 +207,11 @@ func TestDockerMemoryAndReplicaStates(t *testing.T) {
 }
 func TestProcessIdentityAmbiguityAndChurn(t *testing.T) {
 	uid := uint32(1002)
-	row := "42 1 1002 10 Sat Oct 31 13:10:00 2026 app\n"
+	row := "42 1 1002 10 0:01.00 Sat Oct 31 13:10:00 2026 app\n"
 	target := MemoryTarget{Manager: "service", Service: "demo", UID: &uid, Executable: "app"}
 	for _, tc := range []struct{ name, first, second, status string }{
 		{"good", row, row, "ok"}, {"missing", "", "", "not_found"}, {"multiple", row + strings.Replace(row, "42 1", "43 1", 1), "", "ambiguous"},
-		{"reused pid", row, strings.Replace(row, "13:10:00", "13:11:00", 1), "identity_changed"}, {"new child", row, row + "43 42 1002 5 Sat Oct 31 13:10:00 2026 worker\n", "identity_changed"}, {"bad rss", strings.Replace(row, "1002 10", "1002 -1", 1), "", "error"},
+		{"reused pid", row, strings.Replace(row, "13:10:00", "13:11:00", 1), "identity_changed"}, {"new child", row, row + "43 42 1002 5 0:00.10 Sat Oct 31 13:10:00 2026 worker\n", "identity_changed"}, {"bad rss", strings.Replace(row, "1002 10", "1002 -1", 1), "", "error"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := memoryEnv(cgroupFiles())

@@ -78,7 +78,10 @@ type MemoryReading struct {
 	Method   string `json:"method"`
 	Value    int64  `json:"value"`
 	Capacity *int64 `json:"capacity"`
-	Accuracy string `json:"accuracy"`
+	// CapacitySource says where the capacity comes from: "limit" is a limit of the app itself (cgroup or
+	// container), "host" is the whole machine (memory in bytes, CPU in millicores).
+	CapacitySource string `json:"capacity_source,omitempty"`
+	Accuracy       string `json:"accuracy"`
 }
 type memoryError struct{ status, reason string }
 
@@ -363,7 +366,12 @@ func readAppCgroup(env OpEnv, pid int) ([]MemoryReading, string, error) {
 				return nil, "", e
 			}
 			if n > 0 && n < 1<<60 {
-				r.Capacity = &n
+				r = withCapacity(r, n, "limit")
+			}
+		}
+		if r.Capacity == nil {
+			if total, ok := hostMemoryBytes(env, nil); ok {
+				r = withCapacity(r, total, "host")
 			}
 		}
 		out := []MemoryReading{r}
@@ -380,6 +388,9 @@ func readAppCgroup(env OpEnv, pid int) ([]MemoryReading, string, error) {
 					break
 				}
 			}
+		}
+		if cpu := cgroupCPUReading(env, pid, kind, dir); cpu != nil {
+			out = append(out, *cpu)
 		}
 		return out, group, nil
 	}

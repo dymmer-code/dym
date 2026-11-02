@@ -150,11 +150,12 @@ type memoryProcess struct {
 	pid, ppid   int
 	uid         uint32
 	rss         int64
+	cpu         int64 // cumulative CPU time in nanoseconds, -1 when ps did not give a valid one
 	start, comm string
 }
 
 func (c memoryCollector) processSnapshot() (map[int]memoryProcess, error) {
-	s, e := c.run("ps", "-ax", "-o", "pid=", "-o", "ppid=", "-o", "uid=", "-o", "rss=", "-o", "lstart=", "-o", "comm=")
+	s, e := c.run("ps", "-ax", "-o", "pid=", "-o", "ppid=", "-o", "uid=", "-o", "rss=", "-o", "time=", "-o", "lstart=", "-o", "comm=")
 	if e != nil {
 		return nil, e
 	}
@@ -164,7 +165,7 @@ func (c memoryCollector) processSnapshot() (map[int]memoryProcess, error) {
 			continue
 		}
 		f := strings.Fields(l)
-		if len(f) < 10 {
+		if len(f) < 11 {
 			return nil, memError("error", "invalid_process_list")
 		}
 		pid, e1 := strconv.Atoi(f[0])
@@ -180,7 +181,11 @@ func (c memoryCollector) processSnapshot() (map[int]memoryProcess, error) {
 		if _, dup := out[pid]; dup {
 			return nil, memError("error", "invalid_process_list")
 		}
-		out[pid] = memoryProcess{pid: pid, ppid: ppid, uid: uint32(uid), rss: rss * 1024, start: strings.Join(f[4:9], " "), comm: strings.Join(f[9:], " ")}
+		cpu, e5 := parseCPUTime(f[4])
+		if e5 != nil {
+			cpu = -1
+		}
+		out[pid] = memoryProcess{pid: pid, ppid: ppid, uid: uint32(uid), rss: rss * 1024, cpu: cpu, start: strings.Join(f[5:10], " "), comm: strings.Join(f[10:], " ")}
 		if len(out) > 4096 {
 			return nil, memError("unsupported", "process_limit")
 		}
@@ -273,11 +278,17 @@ func (c memoryCollector) processes(t MemoryTarget) ([]MemoryInstance, error) {
 		}
 	}
 	total := int64(0)
+	cpuTotal, cpuKnown := int64(0), true
 	for pid, p := range tree {
 		if total > math.MaxInt64-p.rss {
 			return nil, memError("error", "invalid_counter")
 		}
 		total += p.rss
+		if p.cpu < 0 || cpuTotal > math.MaxInt64-p.cpu {
+			cpuKnown = false
+		} else {
+			cpuTotal += p.cpu
+		}
 		if c.env.GOOS == "linux" {
 			ids[pid], e = linuxPIDIdentity(c.env, pid)
 			if e != nil {
@@ -287,7 +298,7 @@ func (c memoryCollector) processes(t MemoryTarget) ([]MemoryInstance, error) {
 			ids[pid] = identity(boot, strconv.Itoa(pid), p.start, strconv.FormatUint(uint64(p.uid), 10), p.comm)
 		}
 	}
-	readings := []MemoryReading{{Metric: "memory_rss_bytes", Method: "process_rss", Value: total, Accuracy: "shared_pages_may_repeat"}}
+	readings := c.processUsageReadings(total, cpuTotal, cpuKnown)
 	if t.Cgroup != "" {
 		if c.env.GOOS != "linux" {
 			return nil, memError("unsupported", "platform")

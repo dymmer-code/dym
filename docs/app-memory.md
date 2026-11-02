@@ -179,11 +179,25 @@ shared cgroup. Without this declaration the standalone selector reports RSS.
   tree, method `process_rss`, accuracy `shared_pages_may_repeat`. Shared pages may
   be counted more than once. It is not peak RSS and cannot be compared directly
   to cgroup accounting.
+* `cpu_usage_ns`: **cumulative** CPU time in nanoseconds. The consumer divides the
+  difference between two observations of the same instance and method by the elapsed
+  time; a value that goes down means a restart or processes that ended, and the
+  interval is discarded, never shown as negative use. Methods: `cgroup_v2`
+  (`cpu.stat`), `cgroup_v1` (`cpuacct.usage`) and `process_cputime` (the TIME of
+  `ps`, accuracy `live_processes_only`: processes that already ended are not in it).
+  The reading is left out when the host does not offer the counter; memory is still
+  reported.
 
-Swap is not included as a separate measurement in v1. A finite local cgroup limit
-is returned as capacity; unlimited values become null, never the host's RAM.
-An ancestor's shared limit is not advertised as this app's exclusive quota. RSS
-has no capacity. A changing instance/method must break the plotted segment.
+Every reading may carry a `capacity` and a `capacity_source` that says where it comes from:
+
+* `limit`: a limit of the app itself (a finite cgroup or container limit; for CPU, the
+  quota of the group). An ancestor's shared limit is never advertised as the app's own.
+* `host`: no limit of its own, so the whole machine: the physical memory in bytes, or the
+  logical CPUs in millicores (`4000` is four CPUs). It is only a ceiling to compare with,
+  never a quota of the app.
+
+Without `capacity` the machine could not be read. Swap is not included as a separate
+measurement in v1. A changing instance/method must break the plotted segment.
 
 At most 32 container instances and a 64 KiB report are allowed; process snapshots
 and command output are bounded too. Oversized results are unavailable, never a
