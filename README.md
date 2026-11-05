@@ -79,17 +79,32 @@ Content flags accepted by `create` and `update` (only the ones you set are sent 
 
 `--name`, `--ttl`, `--ip`, `--ipv6`, `--alias`, `--mail-provider`, `--priority`, `--ns`, `--value`, `--port`, `--weight`, `--target`
 
-### `dym domain <domain> mailboxes`
+### `dym domain <domain> identities`
+
+An address (an *identity*) can send with its own password, let other addresses send as it, and receive in a mailbox or forward; a mailbox and a forwarding are never both. `<address>` is a name, `name@domain` or an id. Lists show the first 8 characters of an id; any beginning of it that is not ambiguous works, as in git (so does `<id>` of `storages`).
 
 | Command | Description |
 | --- | --- |
-| `dym domain <domain> mailboxes list [--filter field=value]... [--select fields] [-o table\|json\|csv\|tsv]` | List mailboxes |
+| `dym domain <domain> identities list [--filter field=value]... [--select fields] [-o table\|json\|csv\|tsv]` | List the addresses, how each one sends and where it receives |
+| `dym domain <domain> identities add <name> [--password-stdin \| --ask-password] [--mailbox [--from-storage <id>] \| --forward a@x.com,b@x.com \| --no-receive] [--enabled=false]` | Add an address. A mailbox needs a password |
+| `dym domain <domain> identities edit <address> [--rename <name> [--update-forwardings]] [--enabled=bool] [--password-stdin \| --ask-password \| --remove-password] [--mailbox \| --forward ... \| --no-receive]` | Change only what is named. Renaming keeps the mailbox, its mail and the permissions to send as it; `--update-forwardings` makes the forwardings of the zone that sent to the old address send to the new one |
+| `dym domain <domain> identities delete <address> [--yes]` | Delete an address for good. The mail of its mailbox, if any, is kept for a while (see `storages`) |
+| `dym domain <domain> identities send-as add\|remove <address> <credential>` | Let an address with a password (of this zone or of another of yours, `name@other.org`) send as `<address>`, or stop it |
 
-### `dym domain <domain> forwardings`
+The password is read from the standard input (`--password-stdin`) or asked twice on the terminal without echo (`--ask-password`); there is deliberately no flag that takes it as an argument, because it would show in the list of processes. Output never includes the password hash.
+
+`mailboxes` and `forwardings` no longer exist (the API answers `410 update dym`): use `identities`.
+
+### `dym domain <domain> storages`
+
+When a mailbox is deleted, or its address stops being a mailbox, its mail is kept for a while as a *deleted mailbox*; it still counts in your limit until it is gone.
 
 | Command | Description |
 | --- | --- |
-| `dym domain <domain> forwardings list [--filter field=value]... [--select fields] [-o table\|json\|csv\|tsv]` | List mail forwardings |
+| `dym domain <domain> storages list [--filter field=value]... [--select fields] [-o table\|json\|csv\|tsv]` | List the deleted mailboxes that can be recovered, with the days left |
+| `dym domain <domain> storages attach <id> --as <name> [--password-stdin \| --ask-password]` | Recover it, with its mail, into a new address with that name |
+| `dym domain <domain> storages attach <id> --to <address>` | Give it to an existing address that has no mailbox and does not forward (administrators only) |
+| `dym domain <domain> storages delete <id> [--yes]` | Delete its mail now, for good, and free its place |
 
 ### `dym project <project> apps`
 
@@ -145,13 +160,13 @@ Every command that prints API results defaults to a human-readable table on stdo
 Field names are the API's real JSON field names, not always the same as the CLI's create/update flag names. Notably: a DNS record's TTL flag is `--ttl` but its field name is `time_to_live`; a record's type-specific data (IP address, alias target, etc.) lives under `content`, accessed with a dot, e.g. `content.ip`, `content.value`, `content.mail_provider` (same key names used for the `--ip`/`--value`/`--mail-provider` flags). The full field sets:
 
 - `records`: `id`, `type`, `host`, `time_to_live`, `content.<key>`
-- `mailboxes`: `username`, `enabled` (password hashes are not exposed here; mail servers read them from `/api/v1/zones/<domain>/identities` with a token scoped `identity:read`)
-- `forwardings`: `username`, `enabled`, `destination`
+- `identities`: `id`, `username`, `enabled`, `has_password`, `mailbox.quota_tier`, `mailbox.quota_used_mb`, `mailbox.storage_key`, `forwarding.destination`, `authorizations` (the password hash is never kept; mail servers read it from `/api/v1/zones/<domain>/identities` with a token scoped `identity:read`)
+- `storages`: `id`, `name`, `abandoned_at`, `purge_after`, `days_left`, `usage_bytes`
 - `secrets get`: `key`, `value`, `comments`, `removed`
 
-**`--filter field=value`** (repeatable, AND-combined) keeps only rows where `field` equals `value`; `--filter field!=value` keeps rows where it doesn't. Repeat the flag to combine multiple conditions, e.g. `--filter type=A --filter host=www` keeps only rows matching both. Comparison is by string representation on both sides — no numeric/boolean-aware comparison. For `forwardings`' `destination` field (a list of addresses), `--filter destination=someone@example.com` matches if that address is *one of* the destinations, not if the whole list equals it. A field that doesn't resolve on a row (a typo, or a content key that record type doesn't have) simply excludes that row — it's not an error. A malformed `--filter` value (missing `=` entirely) is an error, reported before any API call. `--filter` only applies to commands that list rows: `records list`, `mailboxes list`, `forwardings list`, `secrets get`.
+**`--filter field=value`** (repeatable, AND-combined) keeps only rows where `field` equals `value`; `--filter field!=value` keeps rows where it doesn't. Repeat the flag to combine multiple conditions, e.g. `--filter type=A --filter host=www` keeps only rows matching both. Comparison is by string representation on both sides — no numeric/boolean-aware comparison. For `identities`' `forwarding.destination` field (a list of addresses), `--filter destination=someone@example.com` matches if that address is *one of* the destinations, not if the whole list equals it. A field that doesn't resolve on a row (a typo, or a content key that record type doesn't have) simply excludes that row — it's not an error. A malformed `--filter` value (missing `=` entirely) is an error, reported before any API call. `--filter` only applies to commands that list rows: `records list`, `identities list`, `storages list`, `secrets get`.
 
-**`--select field1,field2,...`** (comma-separated, single flag) reduces which fields are shown, in the given order — for both `--output table` (columns become the selected fields, headers uppercased, e.g. `content.ip` -> `CONTENT.IP`) and `--output json` (each object contains exactly those keys, in that order; a field that doesn't resolve on a row renders as an empty table cell or JSON `null`). `--select` applies everywhere a command renders a result: the four list commands above, plus `records create`/`update`/`delete` (projecting the fields of the single created/updated/deleted record). Leaving `--select` unset keeps the existing fixed-column table / full-object JSON output unchanged.
+**`--select field1,field2,...`** (comma-separated, single flag) reduces which fields are shown, in the given order — for both `--output table` (columns become the selected fields, headers uppercased, e.g. `content.ip` -> `CONTENT.IP`) and `--output json` (each object contains exactly those keys, in that order; a field that doesn't resolve on a row renders as an empty table cell or JSON `null`). `--select` applies everywhere a command renders a result: the list commands above, plus `records create`/`update`/`delete` (projecting the fields of the single created/updated/deleted record). Leaving `--select` unset keeps the existing fixed-column table / full-object JSON output unchanged.
 
 ## Extensions
 
@@ -294,15 +309,15 @@ dym ext mailbox-passwd-lines example.com
 ```yaml
 extensions:
   mailbox-lines:
-    url: "{{.BaseURL}}/api/v1/zones/{{.Args.domain}}/mailboxes"
+    url: "{{.BaseURL}}/api/v1/zones/{{.Args.domain}}/identities"
     auth: bearer
     params: [domain]
     response:
       - template: |-
-          {{$domain := .Args.domain}}{{range .Body.mailboxes}}{{if .enabled}}{{.username}}@{{$domain}}	OK
+          {{$domain := .Args.domain}}{{range .Body.identities}}{{if and .enabled .mailbox}}{{.username}}@{{$domain}}	OK
           {{end}}{{end}}
       - template: |-
-          {{$domain := .Args.domain}}{{range .Body.mailboxes}}{{if .enabled}}{{.username}}@{{$domain}}	{{.username}}@{{$domain}}
+          {{$domain := .Args.domain}}{{range .Body.identities}}{{if and .enabled .mailbox}}{{.username}}@{{$domain}}	{{.username}}@{{$domain}}
           {{end}}{{end}}
 ```
 

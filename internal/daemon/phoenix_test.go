@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"testing"
 	"time"
+
+	"github.com/dymmer-code/dym/internal/version"
 )
 
 func ctxTimeout(t *testing.T) context.Context {
@@ -176,5 +178,21 @@ func TestCloseEndsTheConnection(t *testing.T) {
 	case <-c.Done():
 	case <-time.After(3 * time.Second):
 		t.Fatal("Done was not closed")
+	}
+}
+
+func TestTheHandshakeSaysWhichDymConnects(t *testing.T) {
+	original := http.Header{"X-Dym-Host": {"h1"}}
+
+	got := withUserAgent(original)
+
+	if got.Get("User-Agent") != version.UserAgent() || got.Get("X-Dym-Host") != "h1" {
+		t.Fatalf("%v", got)
+	}
+	if original.Get("User-Agent") != "" {
+		t.Fatalf("the headers of the caller are not changed: %v", original)
+	}
+	if withUserAgent(nil).Get("User-Agent") != version.UserAgent() {
+		t.Fatal("it also works without headers")
 	}
 }

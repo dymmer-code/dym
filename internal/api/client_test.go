@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/dymmer-code/dym/internal/version"
 )
 
 func TestListRecordsSendsBearerAndFilter(t *testing.T) {
@@ -161,5 +163,30 @@ func TestCreateRecordEncodesFlatContentFields(t *testing.T) {
 	}
 	if rec.ID != "abc" || rec.Content["ip"] != "127.0.0.1" {
 		t.Fatalf("unexpected record: %+v", rec)
+	}
+}
+
+func TestEveryRequestSaysWhichDymSentIt(t *testing.T) {
+	old := version.Version
+	version.Version = "9.8.7"
+	defer func() { version.Version = old }()
+
+	var seen []string
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = append(seen, r.Header.Get("User-Agent"))
+		io.WriteString(w, `{"status":"ok","records":[]}`)
+	}))
+	defer s.Close()
+
+	c := NewClient(s.URL, "tok", s.Client())
+	if _, err := c.ListRecords(context.Background(), "example.com", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.doRaw(context.Background(), http.MethodGet, "/anything"); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(seen) != 2 || seen[0] != "dym/9.8.7" || seen[1] != "dym/9.8.7" {
+		t.Fatalf("user agents: %v", seen)
 	}
 }

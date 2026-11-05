@@ -113,54 +113,6 @@ func (c *Client) DeleteRecord(ctx context.Context, domain, id string) (*Record, 
 	return &resp.Record, nil
 }
 
-// Mailbox is a single mailbox as returned by the Dymmer API. The API no
-// longer exposes password hashes here; mail servers read credentials from
-// /zones/<domain>/identities (scope identity:read).
-type Mailbox struct {
-	Username string `json:"username"`
-	Enabled  bool   `json:"enabled"`
-}
-
-// ListMailboxes fetches the mailboxes configured for domain.
-func (c *Client) ListMailboxes(ctx context.Context, domain string) ([]Mailbox, error) {
-	var resp struct {
-		Status    string    `json:"status"`
-		Mailboxes []Mailbox `json:"mailboxes"`
-	}
-	path := "/zones/" + url.PathEscape(domain) + "/mailboxes"
-	if err := c.do(ctx, http.MethodGet, path, nil, &resp); err != nil {
-		return nil, err
-	}
-	if resp.Mailboxes == nil {
-		resp.Mailboxes = []Mailbox{}
-	}
-	return resp.Mailboxes, nil
-}
-
-// Forwarding is a single mail forwarding rule as returned by the Dymmer
-// API. Destination can fan out to multiple addresses.
-type Forwarding struct {
-	Username    string   `json:"username"`
-	Destination []string `json:"destination"`
-	Enabled     bool     `json:"enabled"`
-}
-
-// ListForwardings fetches the mail forwardings configured for domain.
-func (c *Client) ListForwardings(ctx context.Context, domain string) ([]Forwarding, error) {
-	var resp struct {
-		Status      string       `json:"status"`
-		Forwardings []Forwarding `json:"forwardings"`
-	}
-	path := "/zones/" + url.PathEscape(domain) + "/forwardings"
-	if err := c.do(ctx, http.MethodGet, path, nil, &resp); err != nil {
-		return nil, err
-	}
-	if resp.Forwardings == nil {
-		resp.Forwardings = []Forwarding{}
-	}
-	return resp.Forwardings, nil
-}
-
 // SecretEntry is a single secret as returned by the Dymmer API's JSON
 // secrets format.
 type SecretEntry struct {

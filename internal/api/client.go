@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"sort"
+
+	"github.com/dymmer-code/dym/internal/version"
 )
 
 // Client is a thin HTTP client for the Dymmer API. baseURL must already
@@ -80,6 +82,7 @@ func (c *Client) do(ctx context.Context, method, path string, body any, out any)
 		return fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("User-Agent", version.UserAgent())
 	req.Header.Set("Accept", "application/json")
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
@@ -110,6 +113,7 @@ func (c *Client) doRaw(ctx context.Context, method, path string) (string, error)
 		return "", fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("User-Agent", version.UserAgent())
 
 	respBody, statusCode, err := c.send(req)
 	if err != nil {

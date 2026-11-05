@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dymmer-code/dym/internal/version"
 	"gopkg.in/yaml.v3"
 )
 
@@ -161,6 +162,7 @@ func Register(ctx context.Context, o Options) (Result, error) {
 		return Result{}, err
 	}
 	req.Header.Set("Authorization", "Bearer "+o.Token)
+	req.Header.Set("User-Agent", version.UserAgent())
 	req.Header.Set("X-Dym-Host", o.HostID)
 	req.Header.Set("X-Dym-Secret", o.HostSecret)
 	req.Header.Set("Content-Type", "application/json")

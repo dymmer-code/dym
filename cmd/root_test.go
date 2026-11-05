@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 )
 
@@ -56,5 +57,18 @@ func TestNewRootCommandHelpDoesNotTouchCredentialStore(t *testing.T) {
 	cmd.SetArgs([]string{"--help"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestVersionFlagSaysWhichDymThisIs(t *testing.T) {
+	out := new(bytes.Buffer)
+	cmd := NewRootCommand(Dependencies{Out: out, Err: new(bytes.Buffer)})
+	cmd.SetArgs([]string{"--version"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(out.String(), "dym version ") {
+		t.Fatalf("%q", out.String())
 	}
 }

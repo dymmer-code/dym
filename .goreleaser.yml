@@ -5,6 +5,8 @@ project_name: dym
 builds:
   - env:
       - CGO_ENABLED=0
+    ldflags:
+      - -s -w -X github.com/dymmer-code/dym/internal/version.Version={{.Version}}
     goos:
       - darwin
       - linux

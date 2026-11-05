@@ -9,6 +9,7 @@ import (
 	"github.com/dymmer-code/dym/internal/confirm"
 	"github.com/dymmer-code/dym/internal/credentials"
 	"github.com/dymmer-code/dym/internal/daemon"
+	"github.com/dymmer-code/dym/internal/version"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
@@ -76,7 +77,7 @@ func NewRootCommand(deps Dependencies) *cobra.Command {
 			return confirm.Prompt(os.Stderr, os.Stdin, prompt)
 		}
 	}
-	cmd := &cobra.Command{Use: "dym", Short: "Dymmer command-line client", SilenceUsage: true}
+	cmd := &cobra.Command{Use: "dym", Short: "Dymmer command-line client", SilenceUsage: true, Version: version.String()}
 	cmd.SetOut(deps.Out)
 	cmd.SetErr(deps.Err)
 	cmd.AddCommand(newAuthCommand(deps))

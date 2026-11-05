@@ -13,32 +13,35 @@ import (
 
 // fakeAPI implements APIClient for tests.
 type fakeAPI struct {
-	records     []api.Record
-	mailboxes   []api.Mailbox
-	forwardings []api.Forwarding
+	records []api.Record
 
 	createResult *api.Record
 	updateResult *api.Record
 	deleteResult *api.Record
 
-	listErr        error
-	createErr      error
-	updateErr      error
-	deleteErr      error
-	mailboxesErr   error
-	forwardingsErr error
+	listErr   error
+	createErr error
+	updateErr error
+	deleteErr error
 
-	lastListDomain    string
-	lastListType      string
-	lastCreateInput   api.RecordInput
-	lastUpdateID      string
-	lastUpdateInput   api.RecordInput
-	deletedID         string
-	mailboxesCalled   bool
-	forwardingsCalled bool
+	lastListDomain  string
+	lastListType    string
+	lastCreateInput api.RecordInput
+	lastUpdateID    string
+	lastUpdateInput api.RecordInput
+	deletedID       string
 
 	secretsResult *api.SecretsResult
 	secretsErr    error
+
+	// identities and storages (cmd/identities_test.go)
+	identities []api.Identity
+	byZone     map[string][]api.Identity // when set, each zone has its own
+	storages   []api.Storage
+	mailCalls  []string
+	mailInput  api.IdentityInput
+	attached   api.AttachInput
+	mailErr    error
 
 	lastSecretsProject    string
 	lastSecretsEnv        string
@@ -162,22 +165,6 @@ func (f *fakeAPI) DeleteRecord(_ context.Context, _ string, id string) (*api.Rec
 		return f.deleteResult, nil
 	}
 	return &api.Record{ID: id}, nil
-}
-
-func (f *fakeAPI) ListMailboxes(_ context.Context, _ string) ([]api.Mailbox, error) {
-	f.mailboxesCalled = true
-	if f.mailboxesErr != nil {
-		return nil, f.mailboxesErr
-	}
-	return f.mailboxes, nil
-}
-
-func (f *fakeAPI) ListForwardings(_ context.Context, _ string) ([]api.Forwarding, error) {
-	f.forwardingsCalled = true
-	if f.forwardingsErr != nil {
-		return nil, f.forwardingsErr
-	}
-	return f.forwardings, nil
 }
 
 func (f *fakeAPI) GetSecrets(_ context.Context, project, env, deployment, format string) (*api.SecretsResult, error) {
@@ -436,40 +423,6 @@ func TestRecordsUpdateCallsAPIWithIDAndPrintsJSON(t *testing.T) {
 	}
 }
 
-func TestMailboxesListPrintsJSON(t *testing.T) {
-	fake := &fakeAPI{mailboxes: []api.Mailbox{{Username: "alice", Enabled: true}}}
-	out := new(bytes.Buffer)
-	cmd := NewRootCommand(Dependencies{Out: out, Err: new(bytes.Buffer), API: fake})
-	cmd.SetArgs([]string{"domain", "example.com", "mailboxes", "list", "--output", "json"})
-	if err := cmd.Execute(); err != nil {
-		t.Fatal(err)
-	}
-	var got []api.Mailbox
-	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
-		t.Fatalf("stdout not valid JSON: %v (%q)", err, out.String())
-	}
-	if len(got) != 1 || got[0].Username != "alice" {
-		t.Fatalf("decoded mailboxes = %+v", got)
-	}
-}
-
-func TestForwardingsListPrintsJSON(t *testing.T) {
-	fake := &fakeAPI{forwardings: []api.Forwarding{{Username: "alice", Destination: []string{"bob@example.org"}, Enabled: true}}}
-	out := new(bytes.Buffer)
-	cmd := NewRootCommand(Dependencies{Out: out, Err: new(bytes.Buffer), API: fake})
-	cmd.SetArgs([]string{"domain", "example.com", "forwardings", "list", "--output", "json"})
-	if err := cmd.Execute(); err != nil {
-		t.Fatal(err)
-	}
-	var got []api.Forwarding
-	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
-		t.Fatalf("stdout not valid JSON: %v (%q)", err, out.String())
-	}
-	if len(got) != 1 || got[0].Username != "alice" {
-		t.Fatalf("decoded forwardings = %+v", got)
-	}
-}
-
 func TestRecordsListDefaultsToTable(t *testing.T) {
 	fake := &fakeAPI{records: []api.Record{{ID: "r1", Type: "A", Host: "www", TimeToLive: 300, Content: map[string]string{"ip": "203.0.113.10"}}}}
 	out := new(bytes.Buffer)
@@ -482,38 +435,6 @@ func TestRecordsListDefaultsToTable(t *testing.T) {
 		t.Fatalf("expected table output by default, got JSON-looking output: %q", out.String())
 	}
 	if !strings.Contains(out.String(), "ID") || !strings.Contains(out.String(), "r1") {
-		t.Fatalf("table output missing expected content: %q", out.String())
-	}
-}
-
-func TestMailboxesListDefaultsToTable(t *testing.T) {
-	fake := &fakeAPI{mailboxes: []api.Mailbox{{Username: "alice", Enabled: true}}}
-	out := new(bytes.Buffer)
-	cmd := NewRootCommand(Dependencies{Out: out, Err: new(bytes.Buffer), API: fake})
-	cmd.SetArgs([]string{"domain", "example.com", "mailboxes", "list"})
-	if err := cmd.Execute(); err != nil {
-		t.Fatal(err)
-	}
-	if strings.HasPrefix(strings.TrimSpace(out.String()), "[") {
-		t.Fatalf("expected table output by default, got JSON-looking output: %q", out.String())
-	}
-	if !strings.Contains(out.String(), "USERNAME") || !strings.Contains(out.String(), "alice") {
-		t.Fatalf("table output missing expected content: %q", out.String())
-	}
-}
-
-func TestForwardingsListDefaultsToTable(t *testing.T) {
-	fake := &fakeAPI{forwardings: []api.Forwarding{{Username: "alice", Destination: []string{"bob@example.org"}, Enabled: true}}}
-	out := new(bytes.Buffer)
-	cmd := NewRootCommand(Dependencies{Out: out, Err: new(bytes.Buffer), API: fake})
-	cmd.SetArgs([]string{"domain", "example.com", "forwardings", "list"})
-	if err := cmd.Execute(); err != nil {
-		t.Fatal(err)
-	}
-	if strings.HasPrefix(strings.TrimSpace(out.String()), "[") {
-		t.Fatalf("expected table output by default, got JSON-looking output: %q", out.String())
-	}
-	if !strings.Contains(out.String(), "USERNAME") || !strings.Contains(out.String(), "alice") {
 		t.Fatalf("table output missing expected content: %q", out.String())
 	}
 }
@@ -586,30 +507,6 @@ func TestRecordsDeleteInvalidOutputErrorsBeforePromptOrAPI(t *testing.T) {
 	}
 	if fake.deletedID != "" {
 		t.Fatal("must not call DeleteRecord with an invalid --output")
-	}
-}
-
-func TestMailboxesListInvalidOutputErrorsWithoutCallingAPI(t *testing.T) {
-	fake := &fakeAPI{}
-	cmd := NewRootCommand(Dependencies{Out: new(bytes.Buffer), Err: new(bytes.Buffer), API: fake})
-	cmd.SetArgs([]string{"domain", "example.com", "mailboxes", "list", "--output", "yaml"})
-	if err := cmd.Execute(); err == nil {
-		t.Fatal("expected error for invalid --output")
-	}
-	if fake.mailboxesCalled {
-		t.Fatal("must not call ListMailboxes with an invalid --output")
-	}
-}
-
-func TestForwardingsListInvalidOutputErrorsWithoutCallingAPI(t *testing.T) {
-	fake := &fakeAPI{}
-	cmd := NewRootCommand(Dependencies{Out: new(bytes.Buffer), Err: new(bytes.Buffer), API: fake})
-	cmd.SetArgs([]string{"domain", "example.com", "forwardings", "list", "--output", "yaml"})
-	if err := cmd.Execute(); err == nil {
-		t.Fatal("expected error for invalid --output")
-	}
-	if fake.forwardingsCalled {
-		t.Fatal("must not call ListForwardings with an invalid --output")
 	}
 }
 
@@ -736,46 +633,6 @@ func TestRecordsCreateSelectSingleField(t *testing.T) {
 	want := `{"id":"new-record"}` + "\n"
 	if out.String() != want {
 		t.Fatalf("output = %q, want %q", out.String(), want)
-	}
-}
-
-func TestMailboxesListFilterByEnabled(t *testing.T) {
-	fake := &fakeAPI{mailboxes: []api.Mailbox{
-		{Username: "alice", Enabled: true},
-		{Username: "bob", Enabled: false},
-	}}
-	out := new(bytes.Buffer)
-	cmd := NewRootCommand(Dependencies{Out: out, Err: new(bytes.Buffer), API: fake})
-	cmd.SetArgs([]string{"domain", "example.com", "mailboxes", "list", "--filter", "enabled=true", "--output", "json"})
-	if err := cmd.Execute(); err != nil {
-		t.Fatal(err)
-	}
-	var got []api.Mailbox
-	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
-		t.Fatalf("stdout not valid JSON: %v (%q)", err, out.String())
-	}
-	if len(got) != 1 || got[0].Username != "alice" {
-		t.Fatalf("decoded mailboxes = %+v, want only alice", got)
-	}
-}
-
-func TestForwardingsListFilterByDestinationMembership(t *testing.T) {
-	fake := &fakeAPI{forwardings: []api.Forwarding{
-		{Username: "alice", Destination: []string{"someone@example.com", "other@example.com"}, Enabled: true},
-		{Username: "bob", Destination: []string{"nobody@example.com"}, Enabled: true},
-	}}
-	out := new(bytes.Buffer)
-	cmd := NewRootCommand(Dependencies{Out: out, Err: new(bytes.Buffer), API: fake})
-	cmd.SetArgs([]string{"domain", "example.com", "forwardings", "list", "--filter", "destination=someone@example.com", "--output", "json"})
-	if err := cmd.Execute(); err != nil {
-		t.Fatal(err)
-	}
-	var got []api.Forwarding
-	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
-		t.Fatalf("stdout not valid JSON: %v (%q)", err, out.String())
-	}
-	if len(got) != 1 || got[0].Username != "alice" {
-		t.Fatalf("decoded forwardings = %+v, want only alice", got)
 	}
 }
 

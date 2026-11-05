@@ -4,7 +4,6 @@ import (
 	"encoding/csv"
 	"fmt"
 	"io"
-	"strings"
 
 	"github.com/dymmer-code/dym/internal/api"
 )
@@ -41,29 +40,6 @@ func writeRecordsCSV(w io.Writer, records []api.Record, comma rune) error {
 			host = "@"
 		}
 		rows = append(rows, []string{r.ID, r.Type, host, fmt.Sprintf("%d", r.TimeToLive), contentString(r.Content)})
-	}
-	return writeDelimitedRows(w, rows, comma)
-}
-
-// writeMailboxesCSV renders mailboxes with the same columns as
-// writeMailboxesTable (USERNAME, ENABLED), but with no header
-// row and no "No mailboxes found." message on an empty slice.
-func writeMailboxesCSV(w io.Writer, mailboxes []api.Mailbox, comma rune) error {
-	rows := make([][]string, 0, len(mailboxes))
-	for _, m := range mailboxes {
-		rows = append(rows, []string{m.Username, fmt.Sprintf("%t", m.Enabled)})
-	}
-	return writeDelimitedRows(w, rows, comma)
-}
-
-// writeForwardingsCSV renders forwardings with the same columns as
-// writeForwardingsTable (USERNAME, DESTINATION joined with ", ", ENABLED),
-// but with no header row and no "No forwardings found." message on an
-// empty slice.
-func writeForwardingsCSV(w io.Writer, forwardings []api.Forwarding, comma rune) error {
-	rows := make([][]string, 0, len(forwardings))
-	for _, f := range forwardings {
-		rows = append(rows, []string{f.Username, strings.Join(f.Destination, ", "), fmt.Sprintf("%t", f.Enabled)})
 	}
 	return writeDelimitedRows(w, rows, comma)
 }

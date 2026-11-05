@@ -22,8 +22,15 @@ type APIClient interface {
 	CreateRecord(ctx context.Context, domain string, input api.RecordInput) (*api.Record, error)
 	UpdateRecord(ctx context.Context, domain, id string, input api.RecordInput) (*api.Record, error)
 	DeleteRecord(ctx context.Context, domain, id string) (*api.Record, error)
-	ListMailboxes(ctx context.Context, domain string) ([]api.Mailbox, error)
-	ListForwardings(ctx context.Context, domain string) ([]api.Forwarding, error)
+	ListIdentities(ctx context.Context, zone string) ([]api.Identity, error)
+	CreateIdentity(ctx context.Context, zone string, input api.IdentityInput) (*api.Identity, error)
+	UpdateIdentity(ctx context.Context, zone, id string, input api.IdentityInput) (*api.Identity, error)
+	DeleteIdentity(ctx context.Context, zone, id string) error
+	AllowSendAs(ctx context.Context, zone, id, credentialID string) (*api.Identity, error)
+	RevokeSendAs(ctx context.Context, zone, id, credentialID string) (*api.Identity, error)
+	ListStorages(ctx context.Context, zone string) ([]api.Storage, error)
+	AttachStorage(ctx context.Context, zone, id string, input api.AttachInput) (*api.Identity, error)
+	DeleteStorage(ctx context.Context, zone, id string) error
 	GetSecrets(ctx context.Context, project, env, deployment, format string) (*api.SecretsResult, error)
 	GetAuthStatus(ctx context.Context) (*api.AuthStatus, error)
 	ListWebSites(ctx context.Context, zone, server, host string) ([]api.WebSite, error)
@@ -84,12 +91,13 @@ func wrapAuthError(err error) error {
 func newDomainCommand(deps Dependencies) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:                "domain <domain> <resource> <verb> [args]",
-		Short:              "Manage DNS records, mailboxes, forwardings, and web configuration for a domain",
+		Short:              "Manage DNS records, mail addresses, and web configuration for a domain",
 		DisableFlagParsing: true,
 		Args:               cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			domain := args[0]
 			nested := newDomainResourceTree(domain, deps)
+			nested.SetIn(cmd.InOrStdin())
 			nested.SetOut(cmd.OutOrStdout())
 			nested.SetErr(cmd.ErrOrStderr())
 			nested.SetArgs(args[1:])
@@ -112,8 +120,10 @@ func newDomainResourceTree(domain string, deps Dependencies) *cobra.Command {
 		SilenceErrors:     true,
 	}
 	root.AddCommand(newRecordsCommand(domain, deps))
-	root.AddCommand(newMailboxesCommand(domain, deps))
-	root.AddCommand(newForwardingsCommand(domain, deps))
+	root.AddCommand(newIdentitiesCommand(domain, deps))
+	root.AddCommand(newStoragesCommand(domain, deps))
+	root.AddCommand(newRetiredCommand(domain, "mailboxes"))
+	root.AddCommand(newRetiredCommand(domain, "forwardings"))
 	root.AddCommand(newDomainWebCommand(domain, deps))
 	return root
 }
@@ -432,117 +442,5 @@ func newRecordsDeleteCommand(domain string, deps Dependencies) *cobra.Command {
 	cmd.Flags().BoolVar(&yes, "yes", false, "Skip the confirmation prompt")
 	cmd.Flags().StringVarP(&output, "output", "o", "table", `Output format: "table", "json", "csv", or "tsv"`)
 	addSelectFlag(cmd, &selectFields)
-	return cmd
-}
-
-func newMailboxesCommand(domain string, deps Dependencies) *cobra.Command {
-	cmd := &cobra.Command{Use: "mailboxes", Short: "Manage mailboxes"}
-	var output, selectFields string
-	var filterArgs []string
-	list := &cobra.Command{
-		Use:   "list",
-		Short: "List mailboxes",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			if output != "table" && output != "json" && output != "csv" && output != "tsv" {
-				return errors.New(`--output must be "table", "json", "csv", or "tsv"`)
-			}
-			filters, err := parseFilters(filterArgs)
-			if err != nil {
-				return err
-			}
-			fields := parseSelect(selectFields)
-			client, err := resolveAPI(deps)
-			if err != nil {
-				return err
-			}
-			mailboxes, err := client.ListMailboxes(cmd.Context(), domain)
-			if err != nil {
-				return wrapAuthError(err)
-			}
-			mailboxes, rows, err := applyFilters(mailboxes, filters)
-			if err != nil {
-				return err
-			}
-			if output == "csv" || output == "tsv" {
-				comma := ','
-				if output == "tsv" {
-					comma = '\t'
-				}
-				if len(fields) == 0 {
-					return writeMailboxesCSV(cmd.OutOrStdout(), mailboxes, comma)
-				}
-				return writeSelectedDelimited(cmd.OutOrStdout(), rows, fields, comma)
-			}
-			if len(fields) == 0 {
-				if output == "json" {
-					return json.NewEncoder(cmd.OutOrStdout()).Encode(mailboxes)
-				}
-				return writeMailboxesTable(cmd.OutOrStdout(), mailboxes)
-			}
-			if output == "json" {
-				return writeSelectedJSON(cmd.OutOrStdout(), rows, fields, true)
-			}
-			return writeSelectedTable(cmd.OutOrStdout(), rows, fields, "No mailboxes found.")
-		},
-	}
-	list.Flags().StringVarP(&output, "output", "o", "table", `Output format: "table", "json", "csv", or "tsv"`)
-	addFilterAndSelectFlags(list, &filterArgs, &selectFields)
-	cmd.AddCommand(list)
-	return cmd
-}
-
-func newForwardingsCommand(domain string, deps Dependencies) *cobra.Command {
-	cmd := &cobra.Command{Use: "forwardings", Short: "Manage mail forwardings"}
-	var output, selectFields string
-	var filterArgs []string
-	list := &cobra.Command{
-		Use:   "list",
-		Short: "List mail forwardings",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			if output != "table" && output != "json" && output != "csv" && output != "tsv" {
-				return errors.New(`--output must be "table", "json", "csv", or "tsv"`)
-			}
-			filters, err := parseFilters(filterArgs)
-			if err != nil {
-				return err
-			}
-			fields := parseSelect(selectFields)
-			client, err := resolveAPI(deps)
-			if err != nil {
-				return err
-			}
-			forwardings, err := client.ListForwardings(cmd.Context(), domain)
-			if err != nil {
-				return wrapAuthError(err)
-			}
-			forwardings, rows, err := applyFilters(forwardings, filters)
-			if err != nil {
-				return err
-			}
-			if output == "csv" || output == "tsv" {
-				comma := ','
-				if output == "tsv" {
-					comma = '\t'
-				}
-				if len(fields) == 0 {
-					return writeForwardingsCSV(cmd.OutOrStdout(), forwardings, comma)
-				}
-				return writeSelectedDelimited(cmd.OutOrStdout(), rows, fields, comma)
-			}
-			if len(fields) == 0 {
-				if output == "json" {
-					return json.NewEncoder(cmd.OutOrStdout()).Encode(forwardings)
-				}
-				return writeForwardingsTable(cmd.OutOrStdout(), forwardings)
-			}
-			if output == "json" {
-				return writeSelectedJSON(cmd.OutOrStdout(), rows, fields, true)
-			}
-			return writeSelectedTable(cmd.OutOrStdout(), rows, fields, "No forwardings found.")
-		},
-	}
-	list.Flags().StringVarP(&output, "output", "o", "table", `Output format: "table", "json", "csv", or "tsv"`)
-	addFilterAndSelectFlags(list, &filterArgs, &selectFields)
-	cmd.AddCommand(list)
 	return cmd
 }

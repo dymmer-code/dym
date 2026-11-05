@@ -67,50 +67,6 @@ func TestWriteRecordsCSVQuotesValuesContainingComma(t *testing.T) {
 	}
 }
 
-func TestWriteMailboxesCSVNormalOutput(t *testing.T) {
-	mailboxes := []api.Mailbox{{Username: "alice", Enabled: true}}
-	var buf bytes.Buffer
-	if err := writeMailboxesCSV(&buf, mailboxes, ','); err != nil {
-		t.Fatal(err)
-	}
-	want := "alice,true\n"
-	if buf.String() != want {
-		t.Fatalf("got %q, want %q", buf.String(), want)
-	}
-}
-
-func TestWriteMailboxesCSVEmptySliceWritesNothing(t *testing.T) {
-	var buf bytes.Buffer
-	if err := writeMailboxesCSV(&buf, nil, ','); err != nil {
-		t.Fatal(err)
-	}
-	if buf.String() != "" {
-		t.Fatalf("got %q, want empty output", buf.String())
-	}
-}
-
-func TestWriteForwardingsCSVNormalOutput(t *testing.T) {
-	forwardings := []api.Forwarding{{Username: "alice", Destination: []string{"bob@example.com", "carol@example.com"}, Enabled: true}}
-	var buf bytes.Buffer
-	if err := writeForwardingsCSV(&buf, forwardings, ','); err != nil {
-		t.Fatal(err)
-	}
-	want := "alice,\"bob@example.com, carol@example.com\",true\n"
-	if buf.String() != want {
-		t.Fatalf("got %q, want %q", buf.String(), want)
-	}
-}
-
-func TestWriteForwardingsCSVEmptySliceWritesNothing(t *testing.T) {
-	var buf bytes.Buffer
-	if err := writeForwardingsCSV(&buf, nil, ','); err != nil {
-		t.Fatal(err)
-	}
-	if buf.String() != "" {
-		t.Fatalf("got %q, want empty output", buf.String())
-	}
-}
-
 func TestWriteSecretsCSVNormalOutput(t *testing.T) {
 	entries := []api.SecretEntry{{Key: "API_KEY", Value: "s3cr3t"}}
 	var buf bytes.Buffer

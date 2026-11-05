@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/dymmer-code/dym/internal/credentials"
+	"github.com/dymmer-code/dym/internal/version"
 	"github.com/spf13/cobra"
 )
 
@@ -478,6 +479,7 @@ func doExtensionRequest(ctx context.Context, deps Dependencies, ext *extension, 
 	if err != nil {
 		return nil, fmt.Errorf("extension %q: building request to %s: %w", ext.Name, redactedURL, safeRequestError(err, urlStr, redactedURL))
 	}
+	httpReq.Header.Set("User-Agent", version.UserAgent())
 	if len(body) > 0 {
 		httpReq.Header.Set("Content-Type", "application/json")
 	}

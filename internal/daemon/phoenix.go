@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/dymmer-code/dym/internal/version"
 )
 
 // Event is a message that the server pushed on a topic that was joined.
@@ -79,6 +80,7 @@ var HeartbeatEvery = 30 * time.Second
 // Dial opens the connection. `url` is the websocket endpoint without the query (the version is added here) and
 // `header` carries the credentials, which must not go in the URL because proxies write it in their logs.
 func Dial(ctx context.Context, url string, header http.Header) (*Conn, error) {
+	header = withUserAgent(header)
 	ws, resp, err := websocket.Dial(ctx, url+"?vsn=2.0.0", &websocket.DialOptions{HTTPHeader: header})
 	if err != nil {
 		status := 0
@@ -302,4 +304,14 @@ func (c *Conn) heartbeatLoop() {
 			}
 		}
 	}
+}
+
+// withUserAgent adds the User-Agent of dym to the headers of the handshake, without changing the caller's.
+func withUserAgent(header http.Header) http.Header {
+	out := http.Header{}
+	for key, values := range header {
+		out[key] = append([]string(nil), values...)
+	}
+	out.Set("User-Agent", version.UserAgent())
+	return out
 }
